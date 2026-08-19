@@ -1,0 +1,9 @@
+node_modules
+dist
+drizzle
+.git
+.idea
+.env
+npm-debug.log
+Dockerfile
+compose.yaml

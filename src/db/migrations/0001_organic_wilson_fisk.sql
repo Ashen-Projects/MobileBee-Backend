@@ -1,0 +1,1 @@
+ALTER TABLE `stock` MODIFY COLUMN `code` varchar(255) NOT NULL;
