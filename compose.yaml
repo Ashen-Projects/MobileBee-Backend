@@ -1,0 +1,51 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mobile-shop-pos-api
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      CORS_ORIGIN: http://localhost:3000
+      DATABASE_URL: mysql://mobile_shop_user:mobile_shop_password@db:3306/mobile_shop_pos
+      DB_HOST: db
+      DB_USER: mobile_shop_user
+      DB_PASSWORD: mobile_shop_password
+      DB_NAME: mobile_shop_pos
+      DB_PORT: 3306
+      DB_CONNECTION_LIMIT: 10
+      MYSQL_ROOT_PASSWORD: mobile_shop_root_password
+      MYSQL_DATABASE: mobile_shop_pos
+      MYSQL_USER: mobile_shop_user
+      MYSQL_PASSWORD: mobile_shop_password
+      MYSQL_PORT: 3306
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: mysql:8.4
+    container_name: mobile-shop-pos-db
+    environment:
+      MYSQL_ROOT_PASSWORD: mobile_shop_root_password
+      MYSQL_DATABASE: mobile_shop_pos
+      MYSQL_USER: mobile_shop_user
+      MYSQL_PASSWORD: mobile_shop_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  mysql_data:

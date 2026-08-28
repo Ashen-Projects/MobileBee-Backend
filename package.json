@@ -4,12 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
+    "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:check-identifiers": "node scripts/check-mysql-identifiers.mjs",
+    "db:generate": "drizzle-kit generate && npm run db:check-identifiers",
+    "db:migrate": "npm run db:check-identifiers && npm run build && node dist/db/migrate.js",
+    "db:sql": "npm run db:migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "docker:up": "docker compose up --build",
@@ -26,6 +28,8 @@
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
+    "firebase-admin": "^14.2.0",
     "helmet": "^8.3.0",
     "mysql2": "^3.23.0",
     "zod": "^4.4.3"
@@ -38,5 +42,8 @@
     "drizzle-kit": "^0.31.10",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

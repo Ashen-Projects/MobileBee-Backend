@@ -1,0 +1,7 @@
+node_modules/
+dist/
+src/db/manual-migration.sql
+.env
+.DS_Store
+npm-debug.log*
+.idea/
