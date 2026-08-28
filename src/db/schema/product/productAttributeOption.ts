@@ -10,6 +10,8 @@ export const productAttributeOptions = mysqlTable(
       .references(() => productAttributes.id),
     value: varchar('value', { length: 150 }).notNull(),
     label: varchar('label', { length: 150 }).notNull(),
+    description: varchar('description', { length: 1024 }),
+    iconUrl: varchar('icon_url', { length: 1024 }),
     colorHex: varchar('color_hex', { length: 7 }),
     priority: int('priority').notNull().default(0),
     isActive: boolean('is_active').notNull().default(true),

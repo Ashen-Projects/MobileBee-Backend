@@ -22,6 +22,69 @@
       "when": 1787158729585,
       "tag": "0002_handy_sunspot",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1787331922791,
+      "tag": "0003_slippery_tigra",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1787499487764,
+      "tag": "0004_yellow_karen_page",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1787501164171,
+      "tag": "0005_good_amphibian",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1787506494474,
+      "tag": "0006_omniscient_arachne",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1787733642780,
+      "tag": "0007_square_the_phantom",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1787735221005,
+      "tag": "0008_natural_guardsmen",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1787757907094,
+      "tag": "0009_round_leech",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1787926150174,
+      "tag": "0010_loose_ultimo",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1787926347807,
+      "tag": "0011_pink_tony_stark",
+      "breakpoints": true
     }
   ]
 }

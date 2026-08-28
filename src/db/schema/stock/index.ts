@@ -1,4 +1,5 @@
 export * from './stock';
+export * from './stockIdentifier';
 export * from './stockAdjustment';
 export * from './stockAdjustmentItem';
 export * from './stockLog';

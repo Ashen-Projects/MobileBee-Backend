@@ -3,7 +3,26 @@ import { eq } from 'drizzle-orm';
 import { db } from '..';
 import { env } from '../../env';
 import { firebaseAuth } from '../../services/auth/firebaseService';
-import { locations, permissions, rolePermissions, roles, userRoles, users } from '../schema';
+import {
+  documentSequences,
+  locations,
+  permissions,
+  purchaseOrderStatuses,
+  rolePermissions,
+  roles,
+  stockStatuses,
+  userRoles,
+  users,
+} from '../schema';
+import {
+  DOCUMENT_TYPES,
+  PURCHASE_ORDER_STATUS,
+  STOCK_STATUS,
+  TIME_ZONE,
+  USER_ACCESS,
+  USER_PERMISSIONS,
+  USER_ROLES,
+} from '../../utils/constants';
 
 const getOrCreateFirebaseAdministrator = async () => {
   try {
@@ -32,32 +51,313 @@ export const seedDatabase = async (): Promise<void> => {
     type: 'shop',
   }).onDuplicateKeyUpdate({ set: { isActive: true, name: 'Head Office' } });
 
+  const [headOffice] = await db.select({ id: locations.id }).from(locations)
+    .where(eq(locations.code, 'HEAD_OFFICE')).limit(1);
+  if (!headOffice) throw new Error('Failed to seed the Head Office location.');
+
+  const purchaseOrderStatusSeeds = [
+    { isFinal: false, label: 'Draft', name: PURCHASE_ORDER_STATUS.DRAFT, priority: 10 },
+    { isFinal: false, label: 'Pending Approval', name: PURCHASE_ORDER_STATUS.PENDING_APPROVAL, priority: 20 },
+    { isFinal: false, label: 'Approved', name: PURCHASE_ORDER_STATUS.APPROVED, priority: 30 },
+    { isFinal: false, label: 'Ordered', name: PURCHASE_ORDER_STATUS.ORDERED, priority: 40 },
+    { isFinal: false, label: 'Partially Received', name: PURCHASE_ORDER_STATUS.PARTIALLY_RECEIVED, priority: 50 },
+    { isFinal: true, label: 'Received', name: PURCHASE_ORDER_STATUS.RECEIVED, priority: 60 },
+    { isFinal: true, label: 'Cancelled', name: PURCHASE_ORDER_STATUS.CANCELLED, priority: 70 },
+    { isFinal: true, label: 'Rejected', name: PURCHASE_ORDER_STATUS.REJECTED, priority: 80 },
+  ];
+  for (const status of purchaseOrderStatusSeeds) {
+    await db.insert(purchaseOrderStatuses).values(status).onDuplicateKeyUpdate({
+      set: { isFinal: status.isFinal, label: status.label, priority: status.priority },
+    });
+  }
+
+  const stockStatusSeeds = [
+    { isActive: true, isSellable: true, label: 'Available', name: STOCK_STATUS.AVAILABLE },
+    { isActive: true, isSellable: false, label: 'Reserved', name: STOCK_STATUS.RESERVED },
+    { isActive: true, isSellable: false, label: 'Sold', name: STOCK_STATUS.SOLD },
+    { isActive: true, isSellable: false, label: 'Damaged', name: STOCK_STATUS.DAMAGED },
+    { isActive: true, isSellable: false, label: 'In Transfer', name: STOCK_STATUS.IN_TRANSFER },
+    { isActive: true, isSellable: false, label: 'Under Repair', name: STOCK_STATUS.UNDER_REPAIR },
+    { isActive: true, isSellable: false, label: 'Returned to Supplier', name: STOCK_STATUS.RETURNED_TO_SUPPLIER },
+    { isActive: true, isSellable: false, label: 'Missing', name: STOCK_STATUS.MISSING },
+  ];
+  for (const status of stockStatusSeeds) {
+    await db.insert(stockStatuses).values(status).onDuplicateKeyUpdate({
+      set: { isActive: status.isActive, isSellable: status.isSellable, label: status.label },
+    });
+  }
+
+  const currentYear = Number(new Intl.DateTimeFormat('en', { timeZone: TIME_ZONE, year: 'numeric' }).format(new Date()));
+  const documentSequenceSeeds = [
+    { documentType: DOCUMENT_TYPES.PURCHASE_ORDER, prefix: 'PO' },
+    { documentType: DOCUMENT_TYPES.GOODS_RECEIVED_NOTE, prefix: 'GRN' },
+    { documentType: DOCUMENT_TYPES.PURCHASE_RETURN, prefix: 'PR' },
+    { documentType: DOCUMENT_TYPES.SUPPLIER_INVOICE, prefix: 'SI' },
+    { documentType: DOCUMENT_TYPES.SUPPLIER_PAYMENT, prefix: 'SP' },
+    { documentType: DOCUMENT_TYPES.STOCK_BARCODE, prefix: 'MOB' },
+    { documentType: DOCUMENT_TYPES.SUPPLIER_CODE, prefix: 'SUP' },
+  ];
+  for (const sequence of documentSequenceSeeds) {
+    await db.insert(documentSequences).values({
+      ...sequence,
+      lastNumber: 0,
+      locationId: headOffice.id,
+      year: currentYear,
+    }).onDuplicateKeyUpdate({ set: { prefix: sequence.prefix } });
+  }
+
   await db.insert(roles).values({
     description: 'System administrator with unrestricted access.',
     isSystem: true,
     label: 'Administrator',
-    name: 'admin',
+    name: USER_ROLES.ADMIN,
   }).onDuplicateKeyUpdate({ set: { isSystem: true, label: 'Administrator' } });
 
-  await db.insert(permissions).values({
-    description: 'Create and provision Mobee users.',
-    key: 'users.create',
-    module: 'users',
-  }).onDuplicateKeyUpdate({ set: { description: 'Create and provision Mobee users.', module: 'users' } });
+  await db.insert(roles).values({
+    description: 'Default role for users waiting for an administrator to assign access.',
+    isSystem: true,
+    label: 'Pending User',
+    name: USER_ROLES.PENDING,
+  }).onDuplicateKeyUpdate({
+    set: { description: 'Default role for users waiting for an administrator to assign access.', isSystem: true, label: 'Pending User' },
+  });
+  const [pendingRole] = await db.select({ id: roles.id }).from(roles)
+    .where(eq(roles.name, USER_ROLES.PENDING)).limit(1);
+  if (!pendingRole) throw new Error('Failed to seed the Pending User role.');
+  await db.delete(rolePermissions).where(eq(rolePermissions.roleId, pendingRole.id));
 
-  const [[location], [adminRole], [createUserPermission], firebaseUser] = await Promise.all([
-    db.select().from(locations).where(eq(locations.code, 'HEAD_OFFICE')).limit(1),
-    db.select().from(roles).where(eq(roles.name, 'admin')).limit(1),
-    db.select().from(permissions).where(eq(permissions.key, 'users.create')).limit(1),
+  const [legacyAllowAllPermission] = await db.select({ id: permissions.id }).from(permissions)
+    .where(eq(permissions.key, 'SUPER_ADMIN')).limit(1);
+  if (legacyAllowAllPermission) {
+    await db.transaction(async (transaction) => {
+      await transaction.delete(rolePermissions).where(eq(rolePermissions.permissionId, legacyAllowAllPermission.id));
+      await transaction.delete(permissions).where(eq(permissions.id, legacyAllowAllPermission.id));
+    });
+  }
+
+  const permissionMainCategory = (module: string): string => {
+    if (module === 'system') return 'System';
+    if (['permissions', 'roles', 'users'].includes(module)) return 'User Management';
+    if (['product_attributes', 'product_categories', 'products'].includes(module)) return 'Products';
+    if (['purchase_orders', 'suppliers'].includes(module)) return 'Purchasing';
+    return 'Dashboard';
+  };
+
+  const permissionSeeds = [
+    {
+      description: 'View the Mobee dashboard.',
+      key: USER_PERMISSIONS.DASHBOARD_VIEW,
+      module: 'dashboard',
+    },
+    {
+      description: 'Access to general authenticated Mobee data.',
+      key: USER_ACCESS.GENERAL_DATA,
+      module: 'system',
+    },
+    {
+      description: 'Create new backend permission catalog entries.',
+      key: USER_PERMISSIONS.PERMISSIONS_CREATE,
+      module: 'permissions',
+    },
+    {
+      description: 'Update custom backend permission catalog entries.',
+      key: USER_PERMISSIONS.PERMISSIONS_UPDATE,
+      module: 'permissions',
+    },
+    {
+      description: 'Delete custom backend permission catalog entries.',
+      key: USER_PERMISSIONS.PERMISSIONS_DELETE,
+      module: 'permissions',
+    },
+    {
+      description: 'View product categories.',
+      key: USER_PERMISSIONS.PRODUCT_CATEGORIES_VIEW,
+      module: 'product_categories',
+    },
+    {
+      description: 'Create product categories.',
+      key: USER_PERMISSIONS.PRODUCT_CATEGORIES_CREATE,
+      module: 'product_categories',
+    },
+    {
+      description: 'Update and activate or deactivate product categories.',
+      key: USER_PERMISSIONS.PRODUCT_CATEGORIES_UPDATE,
+      module: 'product_categories',
+    },
+    {
+      description: 'View product attributes and options.',
+      key: USER_PERMISSIONS.PRODUCT_ATTRIBUTES_VIEW,
+      module: 'product_attributes',
+    },
+    {
+      description: 'Create product attributes and options.',
+      key: USER_PERMISSIONS.PRODUCT_ATTRIBUTES_CREATE,
+      module: 'product_attributes',
+    },
+    {
+      description: 'Update and activate or deactivate product attributes and options.',
+      key: USER_PERMISSIONS.PRODUCT_ATTRIBUTES_UPDATE,
+      module: 'product_attributes',
+    },
+    {
+      description: 'View the product catalog and variations.',
+      key: USER_PERMISSIONS.PRODUCTS_VIEW,
+      module: 'products',
+    },
+    {
+      description: 'Create simple products, variable products, and variations.',
+      key: USER_PERMISSIONS.PRODUCTS_CREATE,
+      module: 'products',
+    },
+    {
+      description: 'Update and activate or deactivate products and variations.',
+      key: USER_PERMISSIONS.PRODUCTS_UPDATE,
+      module: 'products',
+    },
+    {
+      description: 'View purchase orders and their workflow history.',
+      key: USER_PERMISSIONS.PURCHASE_ORDERS_VIEW,
+      module: 'purchase_orders',
+    },
+    {
+      description: 'Create draft purchase orders.',
+      key: USER_PERMISSIONS.PURCHASE_ORDERS_CREATE,
+      module: 'purchase_orders',
+    },
+    {
+      description: 'Update draft purchase orders and their items.',
+      key: USER_PERMISSIONS.PURCHASE_ORDERS_UPDATE,
+      module: 'purchase_orders',
+    },
+    {
+      description: 'Submit draft purchase orders for approval.',
+      key: USER_PERMISSIONS.PURCHASE_ORDERS_SUBMIT,
+      module: 'purchase_orders',
+    },
+    {
+      description: 'Approve or reject submitted purchase orders.',
+      key: USER_PERMISSIONS.PURCHASE_ORDERS_APPROVE,
+      module: 'purchase_orders',
+    },
+    {
+      description: 'Mark approved purchase orders as ordered.',
+      key: USER_PERMISSIONS.PURCHASE_ORDERS_ORDER,
+      module: 'purchase_orders',
+    },
+    {
+      description: 'Cancel eligible purchase orders.',
+      key: USER_PERMISSIONS.PURCHASE_ORDERS_CANCEL,
+      module: 'purchase_orders',
+    },
+    {
+      description: 'View suppliers and their linked products.',
+      key: USER_PERMISSIONS.SUPPLIERS_VIEW,
+      module: 'suppliers',
+    },
+    {
+      description: 'Create suppliers and supplier product links.',
+      key: USER_PERMISSIONS.SUPPLIERS_CREATE,
+      module: 'suppliers',
+    },
+    {
+      description: 'Update suppliers, status, commercial terms, and linked products.',
+      key: USER_PERMISSIONS.SUPPLIERS_UPDATE,
+      module: 'suppliers',
+    },
+    {
+      description: 'View the Mobee role and permission catalog.',
+      key: USER_PERMISSIONS.ROLES_VIEW,
+      module: 'roles',
+    },
+    {
+      description: 'Create Mobee roles.',
+      key: USER_PERMISSIONS.ROLES_CREATE,
+      module: 'roles',
+    },
+    {
+      description: 'Update Mobee roles.',
+      key: USER_PERMISSIONS.ROLES_UPDATE,
+      module: 'roles',
+    },
+    {
+      description: 'Delete unused custom Mobee roles.',
+      key: USER_PERMISSIONS.ROLES_DELETE,
+      module: 'roles',
+    },
+    {
+      description: 'Assign multiple permissions to a Mobee role.',
+      key: USER_PERMISSIONS.ROLES_ASSIGN_PERMISSIONS,
+      module: 'roles',
+    },
+    {
+      description: 'Assign one or more roles to Mobee users.',
+      key: USER_PERMISSIONS.USERS_ASSIGN_ROLES,
+      module: 'users',
+    },
+    {
+      description: 'Create and provision Mobee users.',
+      key: USER_PERMISSIONS.USERS_CREATE,
+      module: 'users',
+    },
+    {
+      description: 'View Mobee users.',
+      key: USER_PERMISSIONS.USERS_VIEW,
+      module: 'users',
+    },
+    {
+      description: 'Update Mobee users and manage their status or credentials.',
+      key: USER_PERMISSIONS.USERS_UPDATE,
+      module: 'users',
+    },
+  ];
+
+  for (const permission of permissionSeeds) {
+    const title = permission.key.split('.').map((part) => part.replace(/_/g, ' '))
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' — ');
+    await db.insert(permissions).values({
+      ...permission,
+      category: permission.module,
+      isSystem: true,
+      mainCategory: permissionMainCategory(permission.module),
+      priority: 100,
+      title,
+    }).onDuplicateKeyUpdate({
+      set: {
+        category: permission.module,
+        description: permission.description,
+        isSystem: true,
+        mainCategory: permissionMainCategory(permission.module),
+        module: permission.module,
+        title,
+      },
+    });
+  }
+
+  const [[location], [adminRole], adminPermissions, firebaseUser] = await Promise.all([
+    db.select().from(locations).where(eq(locations.id, headOffice.id)).limit(1),
+    db.select().from(roles).where(eq(roles.name, USER_ROLES.ADMIN)).limit(1),
+    db.select().from(permissions),
     getOrCreateFirebaseAdministrator(),
   ]);
 
-  if (!location || !adminRole || !createUserPermission) throw new Error('Failed to seed administrator prerequisites.');
+  if (!location || !adminRole) throw new Error('Failed to seed administrator prerequisites.');
 
-  await db.insert(rolePermissions).values({
-    permissionId: createUserPermission.id,
-    roleId: adminRole.id,
-  }).onDuplicateKeyUpdate({ set: { permissionId: createUserPermission.id } });
+  for (const permission of adminPermissions) {
+    await db.insert(rolePermissions).values({
+      permissionId: permission.id,
+      roleId: adminRole.id,
+    }).onDuplicateKeyUpdate({ set: { permissionId: permission.id } });
+  }
+
+  const generalDataPermission = adminPermissions.find(({ key }) => key === USER_ACCESS.GENERAL_DATA);
+  const allRoles = await db.select({ id: roles.id, name: roles.name }).from(roles);
+  if (!generalDataPermission) throw new Error('Failed to seed GENERAL_DATA permission.');
+  for (const role of allRoles.filter(({ name }) => name !== USER_ROLES.PENDING)) {
+    await db.insert(rolePermissions).values({
+      permissionId: generalDataPermission.id,
+      roleId: role.id,
+    }).onDuplicateKeyUpdate({ set: { permissionId: generalDataPermission.id } });
+  }
 
   await db.insert(users).values({
     defaultLocationId: location.id,

@@ -18,5 +18,5 @@ export const userRoles = mysqlTable(
       .references(() => users.id),
     timestamp: bigint('timestamp', { mode: 'number', unsigned: true }).notNull(),
   },
-  (table) => [primaryKey({ columns: [table.userId, table.roleId, table.locationId] })],
+  (table) => [primaryKey({ columns: [table.userId, table.roleId] })],
 );

@@ -1,5 +1,5 @@
-import { bigint, boolean, index, int, mysqlTable, uniqueIndex, varchar } from 'drizzle-orm/mysql-core';
-import { locations } from '../settings/location';
+import { bigint, boolean, index, int, mysqlTable, text, uniqueIndex, varchar } from 'drizzle-orm/mysql-core';
+import { locations } from '../settings';
 
 export const users = mysqlTable(
   'users',
@@ -8,9 +8,12 @@ export const users = mysqlTable(
     firebaseUid: varchar('firebase_uid', { length: 128 }).notNull(),
     username: varchar('username', { length: 100 }).notNull(),
     passwordHash: varchar('password_hash', { length: 255 }),
+    firstName: varchar('first_name', { length: 100 }),
+    lastName: varchar('last_name', { length: 100 }),
     displayName: varchar('display_name', { length: 255 }).notNull(),
     email: varchar('email', { length: 255 }),
     phone: varchar('phone', { length: 30 }),
+    address: text('address'),
     defaultLocationId: int('default_location_id').references(() => locations.id),
     isActive: boolean('is_active').notNull().default(true),
     lastLoginAt: bigint('last_login_at', { mode: 'number', unsigned: true }),

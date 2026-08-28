@@ -29,7 +29,7 @@ const envSchema = z.object({
   FIREBASE_WEB_API_KEY: z.string().min(1),
   BOOTSTRAP_ADMIN_EMAIL: z.email().default('damjithfernando1@gmail.com'),
   BOOTSTRAP_ADMIN_PASSWORD: z.string().min(12),
-  AUTH_LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900000),
+  AUTH_LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(300000),
   AUTH_LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
 });
 

@@ -1,0 +1,1 @@
+ALTER TABLE `purchase_orders` MODIFY COLUMN `total_amount` decimal(12,2) NOT NULL;

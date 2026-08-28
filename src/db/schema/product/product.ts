@@ -7,6 +7,7 @@ export const products = mysqlTable(
   {
     id: int('id').primaryKey().autoincrement(),
     name: varchar('name', { length: 255 }).notNull(),
+    sku: varchar('sku', { length: 100 }),
     shortDescription: varchar('short_description', { length: 1024 }),
     description: text('description'),
     lowestSellingPrice: decimal('lowest_selling_price', { precision: 10, scale: 2 }).notNull(),
@@ -20,11 +21,14 @@ export const products = mysqlTable(
     seoId: int('seo_id').references(() => seo.seoId),
     isAvailableOnWeb: boolean('is_available_on_web').notNull().default(false),
     hasVariations: boolean('has_variations').notNull().default(false),
+    isActive: boolean('is_active').notNull().default(true),
   },
   (table) => [
     uniqueIndex('products_name_uq').on(table.name),
+    uniqueIndex('products_sku_uq').on(table.sku),
     index('products_parent_id_idx').on(table.parentId),
     index('products_category_id_idx').on(table.categoryId),
     index('products_seo_id_idx').on(table.seoId),
+    index('products_is_active_idx').on(table.isActive),
   ],
 );

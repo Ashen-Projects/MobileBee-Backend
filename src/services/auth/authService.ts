@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { AppError } from '../../errors/app-error';
 import { db } from '../../db';
 import { permissions, rolePermissions, roles, userRoles, users } from '../../db/schema';
+import { USER_ROLES } from '../../utils/constants';
 
 export type AuthenticatedUser = {
   defaultLocationId: number | null;
@@ -10,6 +11,7 @@ export type AuthenticatedUser = {
   email: string | null;
   firebaseUid: string;
   id: number;
+  isPending: boolean;
   permissions: string[];
   roles: Array<{ id: number; label: string; name: string }>;
   username: string;
@@ -40,6 +42,7 @@ export const getAuthenticatedUser = async (firebaseUid: string): Promise<Authent
     email: user.email,
     firebaseUid: user.firebaseUid,
     id: user.id,
+    isPending: assignedRoles.some(({ name }) => name === USER_ROLES.PENDING),
     permissions: assignedPermissions.map(({ key }) => key),
     roles: assignedRoles,
     username: user.username,

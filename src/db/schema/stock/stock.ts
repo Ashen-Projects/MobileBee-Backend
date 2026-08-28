@@ -13,7 +13,7 @@ export const stock = mysqlTable(
     timestamp: bigint('timestamp', { mode: 'number', unsigned: true }).notNull(),
     latestAvailableDateTime: bigint('latest_available_date_time', { mode: 'number', unsigned: true }).notNull(),
     productId: int('product_id').references(() => products.id),
-    code: varchar('code', { length: 255}).notNull(),
+    barcode: varchar('barcode', { length: 64 }),
     supplierId: int('supplier_id').references(() => suppliers.id),
     locationId: int('location_id').references(() => locations.id),
     gCostPrice: decimal('g_cost_price', { precision: 10, scale: 2 }).notNull(),
@@ -26,7 +26,7 @@ export const stock = mysqlTable(
     status: int('status').references(() => stockStatuses.id),
   },
   (table) => [
-    uniqueIndex('stock_code_uq').on(table.code),
+    uniqueIndex('stock_barcode_uq').on(table.barcode),
     index('stock_product_id_idx').on(table.productId),
     index('stock_supplier_id_idx').on(table.supplierId),
     index('stock_location_id_idx').on(table.locationId),
