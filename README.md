@@ -4,7 +4,7 @@ Express 5, TypeScript, MySQL, and Drizzle ORM backend foundation for a Mobile Ph
 
 ## Requirements
 
-- Node.js 22 or newer
+- Node.js 24 or newer
 - Docker and Docker Compose
 - MySQL 8 when running outside Docker
 
@@ -132,3 +132,7 @@ src/db/manual-migration.sql
 Copy the SQL from that file and paste it into MySQL Workbench when you are ready to update the database.
 
 Database schemas are defined under `src/db/schema`, grouped by POS business module.
+
+## Production deployment
+
+The GitHub Actions CI/CD and Hostinger VPS setup are documented in [`docs/PRODUCTION_DEPLOYMENT.md`](docs/PRODUCTION_DEPLOYMENT.md).
