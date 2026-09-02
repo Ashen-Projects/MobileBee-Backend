@@ -162,6 +162,7 @@ export const listSales = async (input: unknown) => {
 
 export const getSale = async (input: unknown) => saleDetail(saleIdSchema.parse(input));
 
+// Search
 export const searchProducts = async (input: unknown, user: AuthenticatedUser) => {
   const query = searchSaleProductsSchema.parse(input);
   if (!user.defaultLocationId) throw new AppError('Your account does not have an assigned sale location.', 400);
