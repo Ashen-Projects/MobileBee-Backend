@@ -15,7 +15,7 @@ import {
   users,
 } from '../schema';
 import {
-  DOCUMENT_TYPES,
+  DOCUMENT_SEQUENCE_DEFAULTS,
   PURCHASE_ORDER_STATUS,
   STOCK_STATUS,
   TIME_ZONE,
@@ -73,6 +73,8 @@ export const seedDatabase = async (): Promise<void> => {
 
   const stockStatusSeeds = [
     { isActive: true, isSellable: true, label: 'Available', name: STOCK_STATUS.AVAILABLE },
+    { isActive: true, isSellable: false, label: 'Pending GRN Approval', name: STOCK_STATUS.PENDING_GRN_APPROVAL },
+    { isActive: true, isSellable: false, label: 'GRN Declined', name: STOCK_STATUS.GRN_DECLINED },
     { isActive: true, isSellable: false, label: 'Reserved', name: STOCK_STATUS.RESERVED },
     { isActive: true, isSellable: false, label: 'Sold', name: STOCK_STATUS.SOLD },
     { isActive: true, isSellable: false, label: 'Damaged', name: STOCK_STATUS.DAMAGED },
@@ -88,16 +90,7 @@ export const seedDatabase = async (): Promise<void> => {
   }
 
   const currentYear = Number(new Intl.DateTimeFormat('en', { timeZone: TIME_ZONE, year: 'numeric' }).format(new Date()));
-  const documentSequenceSeeds = [
-    { documentType: DOCUMENT_TYPES.PURCHASE_ORDER, prefix: 'PO' },
-    { documentType: DOCUMENT_TYPES.GOODS_RECEIVED_NOTE, prefix: 'GRN' },
-    { documentType: DOCUMENT_TYPES.PURCHASE_RETURN, prefix: 'PR' },
-    { documentType: DOCUMENT_TYPES.SUPPLIER_INVOICE, prefix: 'SI' },
-    { documentType: DOCUMENT_TYPES.SUPPLIER_PAYMENT, prefix: 'SP' },
-    { documentType: DOCUMENT_TYPES.STOCK_BARCODE, prefix: 'MOB' },
-    { documentType: DOCUMENT_TYPES.SUPPLIER_CODE, prefix: 'SUP' },
-  ];
-  for (const sequence of documentSequenceSeeds) {
+  for (const sequence of DOCUMENT_SEQUENCE_DEFAULTS) {
     await db.insert(documentSequences).values({
       ...sequence,
       lastNumber: 0,
@@ -139,7 +132,9 @@ export const seedDatabase = async (): Promise<void> => {
     if (module === 'system') return 'System';
     if (['permissions', 'roles', 'users'].includes(module)) return 'User Management';
     if (['product_attributes', 'product_categories', 'products'].includes(module)) return 'Products';
-    if (['purchase_orders', 'suppliers'].includes(module)) return 'Purchasing';
+    if (['grns', 'purchase_orders', 'suppliers'].includes(module)) return 'Purchasing';
+    if (module === 'stock') return 'Inventory';
+    if (['document_sequences', 'locations'].includes(module)) return 'Settings';
     return 'Dashboard';
   };
 
@@ -148,6 +143,36 @@ export const seedDatabase = async (): Promise<void> => {
       description: 'View the Mobee dashboard.',
       key: USER_PERMISSIONS.DASHBOARD_VIEW,
       module: 'dashboard',
+    },
+    {
+      description: 'View business locations.',
+      key: USER_PERMISSIONS.LOCATIONS_VIEW,
+      module: 'locations',
+    },
+    {
+      description: 'Create business locations.',
+      key: USER_PERMISSIONS.LOCATIONS_CREATE,
+      module: 'locations',
+    },
+    {
+      description: 'Update and activate or deactivate business locations.',
+      key: USER_PERMISSIONS.LOCATIONS_UPDATE,
+      module: 'locations',
+    },
+    {
+      description: 'View document numbering sequences.',
+      key: USER_PERMISSIONS.DOCUMENT_SEQUENCES_VIEW,
+      module: 'document_sequences',
+    },
+    {
+      description: 'Create document numbering sequences.',
+      key: USER_PERMISSIONS.DOCUMENT_SEQUENCES_CREATE,
+      module: 'document_sequences',
+    },
+    {
+      description: 'Update document sequence prefixes without changing issued counters.',
+      key: USER_PERMISSIONS.DOCUMENT_SEQUENCES_UPDATE,
+      module: 'document_sequences',
     },
     {
       description: 'Access to general authenticated Mobee data.',
@@ -250,6 +275,36 @@ export const seedDatabase = async (): Promise<void> => {
       module: 'purchase_orders',
     },
     {
+      description: 'View goods received notes, received units, counts, documents, and history.',
+      key: USER_PERMISSIONS.GRNS_VIEW,
+      module: 'grns',
+    },
+    {
+      description: 'Create goods received notes against ordered purchase orders.',
+      key: USER_PERMISSIONS.GRNS_CREATE,
+      module: 'grns',
+    },
+    {
+      description: 'Perform one physical GRN quantity count. A different user must complete the second count unless an administrator performs both.',
+      key: USER_PERMISSIONS.GRNS_COUNT,
+      module: 'grns',
+    },
+    {
+      description: 'Approve or decline GRNs after both independent physical quantity counts.',
+      key: USER_PERMISSIONS.GRNS_FINANCE_APPROVE,
+      module: 'grns',
+    },
+    {
+      description: 'Assign barcodes, IMEIs, or serial numbers and add finance-approved GRN units to stock.',
+      key: USER_PERMISSIONS.GRNS_STOCK_ADD,
+      module: 'grns',
+    },
+    {
+      description: 'Attach documents and audit notes to goods received notes.',
+      key: USER_PERMISSIONS.GRNS_DOCUMENTS,
+      module: 'grns',
+    },
+    {
       description: 'View suppliers and their linked products.',
       key: USER_PERMISSIONS.SUPPLIERS_VIEW,
       module: 'suppliers',
@@ -263,6 +318,11 @@ export const seedDatabase = async (): Promise<void> => {
       description: 'Update suppliers, status, commercial terms, and linked products.',
       key: USER_PERMISSIONS.SUPPLIERS_UPDATE,
       module: 'suppliers',
+    },
+    {
+      description: 'View stock overview, individual stock units, identifiers, locations, and receipt sources.',
+      key: USER_PERMISSIONS.STOCK_VIEW,
+      module: 'stock',
     },
     {
       description: 'View the Mobee role and permission catalog.',
