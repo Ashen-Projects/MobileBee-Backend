@@ -75,9 +75,7 @@ export const createProductSchema = z.object({
   if (data.images.filter(({ isPrimary }) => isPrimary).length > 1) {
     context.addIssue({ code: 'custom', message: 'Only one primary image is allowed.', path: ['images'] });
   }
-  if (data.images.length === 0) {
-    context.addIssue({ code: 'custom', message: 'At least one product image is required.', path: ['images'] });
-  } else if (data.images.filter(({ isPrimary }) => isPrimary).length === 0) {
+  if (data.images.length > 0 && data.images.filter(({ isPrimary }) => isPrimary).length === 0) {
     context.addIssue({ code: 'custom', message: 'One product image must be selected as primary.', path: ['images'] });
   }
   if (!data.hasVariations && Number(data.lowestSellingPrice) > Number(data.mrpPrice)) {

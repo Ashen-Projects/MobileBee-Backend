@@ -131,6 +131,7 @@ export const seedDatabase = async (): Promise<void> => {
   const permissionMainCategory = (module: string): string => {
     if (module === 'system') return 'System';
     if (['permissions', 'roles', 'users'].includes(module)) return 'User Management';
+    if (['sales'].includes(module)) return 'Point of Sale';
     if (['product_attributes', 'product_categories', 'products'].includes(module)) return 'Products';
     if (['grns', 'purchase_orders', 'suppliers'].includes(module)) return 'Purchasing';
     if (module === 'stock') return 'Inventory';
@@ -238,6 +239,16 @@ export const seedDatabase = async (): Promise<void> => {
       description: 'Update and activate or deactivate products and variations.',
       key: USER_PERMISSIONS.PRODUCTS_UPDATE,
       module: 'products',
+    },
+    {
+      description: 'View completed customer sales, payments, stock allocations, and invoices.',
+      key: USER_PERMISSIONS.SALES_VIEW,
+      module: 'sales',
+    },
+    {
+      description: 'Create customer sales, allocate available stock, accept payment, and issue invoices.',
+      key: USER_PERMISSIONS.SALES_CREATE,
+      module: 'sales',
     },
     {
       description: 'View purchase orders and their workflow history.',

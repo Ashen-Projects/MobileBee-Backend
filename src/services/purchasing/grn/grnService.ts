@@ -215,6 +215,12 @@ export const getGrn = async (idInput: unknown) => {
     map.set(row.productId, values);
     return map;
   }, new Map<number, Array<(typeof stockRows)[number] & { identifiers: typeof identifierRows }>>());
+  const availableStockedByProduct = stockRows.reduce((map, row) => {
+    if (row.productId !== null && row.status === 'available') {
+      map.set(row.productId, (map.get(row.productId) ?? 0) + 1);
+    }
+    return map;
+  }, new Map<number, number>());
   return {
     ...header,
     addedByName: userNames.get(header.addedBy),
@@ -224,7 +230,13 @@ export const getGrn = async (idInput: unknown) => {
     counts,
     documents,
     history,
-    items: itemRows.map((item) => ({ ...item, units: stockByProduct.get(item.productId) ?? [] })),
+    items: itemRows.map((item) => ({
+      ...item,
+      // Only sellable units are truly stocked. Pending placeholder rows from
+      // an older flow must still be released through Add to Stock.
+      stockedQuantity: availableStockedByProduct.get(item.productId) ?? 0,
+      units: stockByProduct.get(item.productId) ?? [],
+    })),
   };
 };
 
@@ -511,6 +523,27 @@ export const addGrnStock = async (idInput: unknown, input: unknown, user: Authen
 
     const receivedItems = await transaction.select().from(grnItems).where(eq(grnItems.grnId, id)).for('update');
     const receivedById = new Map(receivedItems.map((item) => [item.id, item]));
+    const [[availableStatus], [pendingApprovalStatus]] = await Promise.all([
+      transaction.select().from(stockStatuses).where(eq(stockStatuses.name, 'available')).limit(1),
+      transaction.select().from(stockStatuses).where(eq(stockStatuses.name, 'pending_grn_approval')).limit(1),
+    ]);
+    if (!availableStatus) throw new AppError('Available stock status is not configured.', 500);
+    const existingStock = await transaction.select({ id: stock.id, productId: stock.productId, status: stock.status })
+      .from(stock).where(eq(stock.grnId, id)).for('update');
+    const availableByProduct = existingStock.reduce((map, row) => {
+      if (row.productId !== null && row.status === availableStatus.id) {
+        map.set(row.productId, (map.get(row.productId) ?? 0) + 1);
+      }
+      return map;
+    }, new Map<number, number>());
+    const placeholderByProduct = existingStock.reduce((map, row) => {
+      if (row.productId !== null && pendingApprovalStatus && row.status === pendingApprovalStatus.id) {
+        const values = map.get(row.productId) ?? [];
+        values.push(row.id);
+        map.set(row.productId, values);
+      }
+      return map;
+    }, new Map<number, number[]>());
     const explicitCodes = data.items.flatMap(({ units }) => units.flatMap((unit) => [
       ...(unit.barcode ? [unit.barcode] : []),
       ...unit.identifiers.map(({ value }) => value),
@@ -530,8 +563,9 @@ export const addGrnStock = async (idInput: unknown, input: unknown, user: Authen
     for (const item of data.items) {
       const received = receivedById.get(item.grnItemId);
       if (!received) throw new AppError(`GRN item ${item.grnItemId} does not belong to this GRN.`, 400);
-      if (item.units.length > received.quantity - received.stockedQuantity) {
-        throw new AppError(`Only ${received.quantity - received.stockedQuantity} unit(s) remain available for '${received.productId}'.`, 409);
+      const remainingQuantity = received.quantity - (availableByProduct.get(received.productId) ?? 0);
+      if (item.units.length > remainingQuantity) {
+        throw new AppError(`Only ${remainingQuantity} unit(s) remain available for '${received.productId}'.`, 409);
       }
     }
 
@@ -556,17 +590,15 @@ export const addGrnStock = async (idInput: unknown, input: unknown, user: Authen
       await transaction.update(documentSequences).set({ lastNumber: generatedStart + generatedCount - 1 })
         .where(eq(documentSequences.id, sequence.id));
     }
-    const [availableStatus] = await transaction.select().from(stockStatuses)
-      .where(eq(stockStatuses.name, 'available')).limit(1);
-    if (!availableStatus) throw new AppError('Available stock status is not configured.', 500);
-
     let generatedOffset = 0;
     const timestamp = Date.now();
     for (const item of data.items) {
       const received = receivedById.get(item.grnItemId)!;
       for (const unit of item.units) {
         const barcode = unit.generateBarcode ? `MB-${String(generatedStart + generatedOffset++).padStart(5, '0')}` : unit.barcode;
-        const inserted = await transaction.insert(stock).values({
+        const placeholderIds = placeholderByProduct.get(received.productId) ?? [];
+        const placeholderId = placeholderIds.shift();
+        const stockId = placeholderId ?? Number((await transaction.insert(stock).values({
           barcode,
           costPrice: received.unitCost,
           gCostPrice: received.unitCost,
@@ -580,8 +612,16 @@ export const addGrnStock = async (idInput: unknown, input: unknown, user: Authen
           status: availableStatus.id,
           supplierId: current.supplierId,
           timestamp,
-        });
-        const stockId = Number(inserted[0].insertId);
+        }))[0].insertId);
+        if (placeholderId) {
+          await transaction.update(stock).set({
+            barcode,
+            costPrice: received.unitCost,
+            gCostPrice: received.unitCost,
+            latestAvailableDateTime: timestamp,
+            status: availableStatus.id,
+          }).where(eq(stock.id, placeholderId));
+        }
         if (unit.identifiers.length) {
           const hasPrimary = unit.identifiers.some(({ isPrimary }) => isPrimary);
           await transaction.insert(stockIdentifiers).values(unit.identifiers.map((identifier, index) => ({
@@ -596,7 +636,9 @@ export const addGrnStock = async (idInput: unknown, input: unknown, user: Authen
           referenceId: id, referenceType: 'grn', stockId, timestamp, userId: user.id,
         });
       }
-      await transaction.update(grnItems).set({ stockedQuantity: received.stockedQuantity + item.units.length })
+      await transaction.update(grnItems).set({
+        stockedQuantity: (availableByProduct.get(received.productId) ?? 0) + item.units.length,
+      })
         .where(eq(grnItems.id, received.id));
     }
     await transaction.insert(grnHistory).values({
