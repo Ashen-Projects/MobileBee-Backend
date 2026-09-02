@@ -1,4 +1,4 @@
-import { bigint, decimal, index, int, mysqlEnum, mysqlTable } from 'drizzle-orm/mysql-core';
+import { bigint, decimal, index, int, mysqlEnum, mysqlTable, text, uniqueIndex, varchar } from 'drizzle-orm/mysql-core';
 import { users } from '../../user/user';
 import { locations } from '../../settings/location';
 import { suppliers } from '../supplier/supplier';
@@ -8,22 +8,25 @@ export const grns = mysqlTable(
   'grns',
   {
     id: int('id').primaryKey().autoincrement(),
+    grnNumber: varchar('grn_number', { length: 100 }).notNull(),
     timestamp: bigint('timestamp', { mode: 'number', unsigned: true }).notNull(),
-    locationId: int('location_id').references(() => locations.id),
-    purchaseOrderId: int('purchase_order_id').references(() => purchaseOrders.id),
-    supplierId: int('supplier_id').references(() => suppliers.id),
-    addedBy: int('added_by').references(() => users.id),
+    locationId: int('location_id').notNull().references(() => locations.id),
+    purchaseOrderId: int('purchase_order_id').notNull().references(() => purchaseOrders.id),
+    supplierId: int('supplier_id').notNull().references(() => suppliers.id),
+    addedBy: int('added_by').notNull().references(() => users.id),
     countedBy: int('counted_by').references(() => users.id),
     counted2By: int('counted2_by').references(() => users.id),
     financeApprovedBy: int('finance_approved_by').references(() => users.id),
-    status: mysqlEnum('status', ['pendingCountApproval', 'pendingFinanceApproval', 'approved', 'declined']).default(
-      'pendingCountApproval',
-    ),
-    costTotal: decimal('cost_total', { precision: 12, scale: 2 }).default('0.00'),
-    paymentStatus: mysqlEnum('payment_status', ['unpaid', 'partiallyPaid', 'paid']).default('unpaid'),
-    paidAmount: decimal('paid_amount', { precision: 12, scale: 2 }).default('0.00'),
+    status: mysqlEnum('status', ['pendingCountApproval', 'pendingFinanceApproval', 'approved', 'declined'])
+      .notNull().default('pendingCountApproval'),
+    costTotal: decimal('cost_total', { precision: 12, scale: 2 }).notNull().default('0.00'),
+    paymentStatus: mysqlEnum('payment_status', ['unpaid', 'partiallyPaid', 'paid']).notNull().default('unpaid'),
+    paidAmount: decimal('paid_amount', { precision: 12, scale: 2 }).notNull().default('0.00'),
+    supplierDeliveryNote: varchar('supplier_delivery_note', { length: 150 }),
+    note: text('note'),
   },
   (table) => [
+    uniqueIndex('grns_grn_number_uq').on(table.grnNumber),
     index('grns_location_id_idx').on(table.locationId),
     index('grns_purchase_order_id_idx').on(table.purchaseOrderId),
     index('grns_supplier_id_idx').on(table.supplierId),

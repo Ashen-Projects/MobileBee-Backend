@@ -7,6 +7,10 @@ import { roleRoutes } from './role/roleRoutes';
 import { productRoutes } from './product/productRoutes';
 import { supplierRoutes } from './purchasing/supplier/supplierRoutes';
 import { purchaseOrderRoutes } from './purchasing/purchaseOrder/purchaseOrderRoutes';
+import { grnRoutes } from './purchasing/grn/grnRoutes';
+import { documentSequenceRoutes } from './settings/documentSequenceRoutes';
+import { locationRoutes } from './settings/locationRoutes';
+import { stockRoutes } from './inventory/stock/stockRoutes';
 import { requireAuth } from '../middlewares/authMiddleware';
 
 export const apiRoutes = Router();
@@ -21,3 +25,7 @@ apiRoutes.use('/roles', roleRoutes);
 apiRoutes.use('/products', productRoutes);
 apiRoutes.use('/suppliers', supplierRoutes);
 apiRoutes.use('/purchase-orders', purchaseOrderRoutes);
+apiRoutes.use('/grns', grnRoutes);
+apiRoutes.use('/locations', locationRoutes);
+apiRoutes.use('/document-sequences', documentSequenceRoutes);
+apiRoutes.use('/stock', stockRoutes);

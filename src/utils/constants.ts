@@ -20,6 +20,16 @@ export const DOCUMENT_TYPES = {
   SUPPLIER_PAYMENT: 'SUPPLIER_PAYMENT',
 } as const;
 
+export const DOCUMENT_SEQUENCE_DEFAULTS = [
+  { documentType: DOCUMENT_TYPES.PURCHASE_ORDER, prefix: 'PO' },
+  { documentType: DOCUMENT_TYPES.GOODS_RECEIVED_NOTE, prefix: 'GRN' },
+  { documentType: DOCUMENT_TYPES.PURCHASE_RETURN, prefix: 'PR' },
+  { documentType: DOCUMENT_TYPES.SUPPLIER_INVOICE, prefix: 'SI' },
+  { documentType: DOCUMENT_TYPES.SUPPLIER_PAYMENT, prefix: 'SP' },
+  { documentType: DOCUMENT_TYPES.STOCK_BARCODE, prefix: 'MB' },
+  { documentType: DOCUMENT_TYPES.SUPPLIER_CODE, prefix: 'SUP' },
+] as const;
+
 export const PURCHASE_ORDER_STATUS = {
   APPROVED: 'approved',
   CANCELLED: 'cancelled',
@@ -34,8 +44,10 @@ export const PURCHASE_ORDER_STATUS = {
 export const STOCK_STATUS = {
   AVAILABLE: 'available',
   DAMAGED: 'damaged',
+  GRN_DECLINED: 'grn_declined',
   IN_TRANSFER: 'in_transfer',
   MISSING: 'missing',
+  PENDING_GRN_APPROVAL: 'pending_grn_approval',
   RESERVED: 'reserved',
   RETURNED_TO_SUPPLIER: 'returned_to_supplier',
   SOLD: 'sold',
@@ -44,6 +56,18 @@ export const STOCK_STATUS = {
 
 export const USER_PERMISSIONS = {
   DASHBOARD_VIEW: 'dashboard.view',
+  DOCUMENT_SEQUENCES_CREATE: 'document_sequences.create',
+  DOCUMENT_SEQUENCES_UPDATE: 'document_sequences.update',
+  DOCUMENT_SEQUENCES_VIEW: 'document_sequences.view',
+  GRNS_COUNT: 'grns.count',
+  GRNS_CREATE: 'grns.create',
+  GRNS_DOCUMENTS: 'grns.documents',
+  GRNS_FINANCE_APPROVE: 'grns.finance_approve',
+  GRNS_STOCK_ADD: 'grns.stock_add',
+  GRNS_VIEW: 'grns.view',
+  LOCATIONS_CREATE: 'locations.create',
+  LOCATIONS_UPDATE: 'locations.update',
+  LOCATIONS_VIEW: 'locations.view',
   PERMISSIONS_CREATE: 'permissions.create',
   PERMISSIONS_DELETE: 'permissions.delete',
   PERMISSIONS_UPDATE: 'permissions.update',
@@ -66,6 +90,7 @@ export const USER_PERMISSIONS = {
   SUPPLIERS_CREATE: 'suppliers.create',
   SUPPLIERS_UPDATE: 'suppliers.update',
   SUPPLIERS_VIEW: 'suppliers.view',
+  STOCK_VIEW: 'stock.view',
   ROLES_ASSIGN_PERMISSIONS: 'roles.assign_permissions',
   ROLES_CREATE: 'roles.create',
   ROLES_DELETE: 'roles.delete',

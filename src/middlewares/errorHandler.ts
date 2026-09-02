@@ -5,6 +5,37 @@ import { AppError } from '../errors/app-error';
 import { env } from '../env';
 import { logger } from '../logger/logger';
 
+type ErrorCause = {
+  code?: unknown;
+  errno?: unknown;
+  message?: unknown;
+  sqlState?: unknown;
+};
+
+const getErrorLogContext = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return { error: String(error) };
+  }
+
+  const cause = (error as Error & { cause?: unknown }).cause;
+  const databaseCause =
+    cause && typeof cause === 'object' ? (cause as ErrorCause) : undefined;
+
+  return {
+    error: error.message,
+    ...(databaseCause?.message
+      ? { cause: String(databaseCause.message) }
+      : {}),
+    ...(databaseCause?.code ? { code: String(databaseCause.code) } : {}),
+    ...(databaseCause?.errno !== undefined
+      ? { errno: databaseCause.errno }
+      : {}),
+    ...(databaseCause?.sqlState
+      ? { sqlState: String(databaseCause.sqlState) }
+      : {}),
+  };
+};
+
 export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   if (error instanceof ZodError) {
     res.status(400).json({
@@ -23,12 +54,14 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
-  logger.error('Unhandled request error.', {
-    error: error instanceof Error ? error.message : String(error),
-  });
+  logger.error('Unhandled request error.', getErrorLogContext(error));
 
   const message =
-    env.NODE_ENV === 'production' ? 'Internal server error.' : error.message ?? 'Internal server error.';
+    env.NODE_ENV === 'production'
+      ? 'Internal server error.'
+      : error instanceof Error
+        ? error.message
+        : 'Internal server error.';
 
   res.status(500).json({
     success: false,

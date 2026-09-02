@@ -4,6 +4,7 @@ import { db } from '../../../db';
 import {
   auditLogs,
   documentSequences,
+  grns,
   locations,
   products,
   purchaseOrderItems,
@@ -47,12 +48,6 @@ const currentYear = () => Number(new Intl.DateTimeFormat('en', {
   timeZone: TIME_ZONE,
   year: 'numeric',
 }).format(new Date()));
-
-const findOrder = async (id: number) => {
-  const [order] = await db.select().from(purchaseOrders).where(eq(purchaseOrders.id, id)).limit(1);
-  if (!order) throw new AppError('Purchase order not found.', 404);
-  return order;
-};
 
 const findStatus = async (name: StatusName) => {
   const [status] = await db.select().from(purchaseOrderStatuses)
@@ -290,20 +285,22 @@ export const createPurchaseOrder = async (input: unknown, user: AuthenticatedUse
 export const updatePurchaseOrder = async (idInput: unknown, input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
   const id = entityIdSchema.parse(idInput);
   const data = updatePurchaseOrderSchema.parse(input);
-  const current = await findOrder(id);
   const draft = await findStatus(PURCHASE_ORDER_STATUS.DRAFT);
-  if (current.status !== draft.id) throw new AppError('Only draft purchase orders can be edited.', 409);
-  const currentItems = await db.select().from(purchaseOrderItems)
-    .where(eq(purchaseOrderItems.purchaseOrderId, id)).orderBy(asc(purchaseOrderItems.id));
-  const items = data.items ?? currentItems.map((item) => ({
-    productId: item.productId,
-    quantity: item.quantity,
-    unitPrice: Number(item.unitPrice),
-  }));
-  const supplierId = data.supplierId ?? current.supplierId;
-  const locationId = data.locationId ?? current.locationId;
-  const selection = await validateOrderSelection(supplierId, locationId, items);
   await db.transaction(async (transaction) => {
+    const [current] = await transaction.select().from(purchaseOrders)
+      .where(eq(purchaseOrders.id, id)).limit(1).for('update');
+    if (!current) throw new AppError('Purchase order not found.', 404);
+    if (current.status !== draft.id) throw new AppError('Only draft purchase orders can be edited.', 409);
+    const currentItems = await transaction.select().from(purchaseOrderItems)
+      .where(eq(purchaseOrderItems.purchaseOrderId, id)).orderBy(asc(purchaseOrderItems.id));
+    const items = data.items ?? currentItems.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      unitPrice: Number(item.unitPrice),
+    }));
+    const supplierId = data.supplierId ?? current.supplierId;
+    const locationId = data.locationId ?? current.locationId;
+    const selection = await validateOrderSelection(supplierId, locationId, items);
     const timestamp = Date.now();
     let poNumber = current.poNumber;
     if (locationId !== current.locationId) {
@@ -369,20 +366,6 @@ const transitionPurchaseOrder = async (
 ) => {
   const id = entityIdSchema.parse(idInput);
   const { note } = transitionPurchaseOrderSchema.parse(input);
-  const initialOrder = await findOrder(id);
-  if (
-    targetName === PURCHASE_ORDER_STATUS.PENDING_APPROVAL
-    || targetName === PURCHASE_ORDER_STATUS.APPROVED
-    || targetName === PURCHASE_ORDER_STATUS.ORDERED
-  ) {
-    const items = await db.select().from(purchaseOrderItems)
-      .where(eq(purchaseOrderItems.purchaseOrderId, id));
-    await validateOrderSelection(initialOrder.supplierId, initialOrder.locationId, items.map((item) => ({
-      productId: item.productId,
-      quantity: item.quantity,
-      unitPrice: Number(item.unitPrice),
-    })));
-  }
   await db.transaction(async (transaction) => {
     const [current] = await transaction.select().from(purchaseOrders)
       .where(eq(purchaseOrders.id, id)).limit(1).for('update');
@@ -396,6 +379,28 @@ const transitionPurchaseOrder = async (
       throw new AppError(`Purchase order cannot be ${action.replace(/_/g, ' ')} from its current status.`, 409);
     }
     if (!target) throw new AppError(`Purchase order status '${targetName}' is not configured.`, 500);
+    if (targetName === PURCHASE_ORDER_STATUS.CANCELLED) {
+      const [activeGrn] = await transaction.select({ id: grns.id }).from(grns).where(and(
+        eq(grns.purchaseOrderId, id),
+        inArray(grns.status, ['pendingCountApproval', 'pendingFinanceApproval', 'approved']),
+      )).limit(1);
+      if (activeGrn) {
+        throw new AppError('This purchase order cannot be cancelled because it has a GRN in progress or approved stock.', 409);
+      }
+    }
+    if (
+      targetName === PURCHASE_ORDER_STATUS.PENDING_APPROVAL
+      || targetName === PURCHASE_ORDER_STATUS.APPROVED
+      || targetName === PURCHASE_ORDER_STATUS.ORDERED
+    ) {
+      const items = await transaction.select().from(purchaseOrderItems)
+        .where(eq(purchaseOrderItems.purchaseOrderId, id));
+      await validateOrderSelection(current.supplierId, current.locationId, items.map((item) => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        unitPrice: Number(item.unitPrice),
+      })));
+    }
     const timestamp = Date.now();
     await transaction.update(purchaseOrders).set({ status: target.id }).where(eq(purchaseOrders.id, id));
     await transaction.insert(purchaseOrderLogs).values({
