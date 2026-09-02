@@ -2,7 +2,7 @@ import { and, count, desc, eq, inArray, like, or, sql, type SQL } from 'drizzle-
 
 import { db } from '../../../db';
 import { grnItems, grns, locations, products, stock, stockIdentifiers, stockStatuses, suppliers } from '../../../db/schema';
-import { listPendingStockReceiptsSchema, listStockSchema } from './stockValidation';
+import { checkStockAvailabilitySchema, listPendingStockReceiptsSchema, listStockSchema, listStockUnitsSchema } from './stockValidation';
 
 const stockFilters = async (query: ReturnType<typeof listStockSchema.parse>) => {
   const filters: SQL[] = [];
@@ -32,11 +32,12 @@ const getPendingRows = async (locationId: number | 'all' = 'all', search = '') =
     const condition = or(...searchable);
     if (condition) filters.push(condition);
   }
-  return db.select({
+  const rows = await db.select({
     grnId: grns.id,
     grnNumber: grns.grnNumber,
     locationId: grns.locationId,
     locationName: locations.name,
+    productId: grnItems.productId,
     quantity: grnItems.quantity,
     stockedQuantity: grnItems.stockedQuantity,
     supplierCode: suppliers.code,
@@ -49,12 +50,72 @@ const getPendingRows = async (locationId: number | 'all' = 'all', search = '') =
     .innerJoin(suppliers, eq(suppliers.id, grns.supplierId))
     .where(and(...filters))
     .orderBy(desc(grns.id), desc(grnItems.id));
+  if (!rows.length) return rows;
+
+  // A GRN item is considered stocked only once its stock unit is available.
+  // This also corrects receipts created by the former placeholder workflow,
+  // which created pending stock units before the final GRN approval.
+  const availableRows = await db.select({
+    grnId: stock.grnId,
+    productId: stock.productId,
+    quantity: count(stock.id),
+  }).from(stock)
+    .innerJoin(stockStatuses, eq(stock.status, stockStatuses.id))
+    .where(and(
+      inArray(stock.grnId, [...new Set(rows.map((row) => row.grnId))]),
+      eq(stockStatuses.name, 'available'),
+    ))
+    .groupBy(stock.grnId, stock.productId);
+  const availableByReceiptProduct = new Map(availableRows.map((row) => [
+    `${row.grnId}:${row.productId}`,
+    Number(row.quantity),
+  ]));
+  return rows.map((row) => ({
+    ...row,
+    stockedQuantity: availableByReceiptProduct.get(`${row.grnId}:${row.productId}`) ?? 0,
+  }));
 };
 
 export const listStock = async (input: unknown) => {
   const query = listStockSchema.parse(input);
   const filters = await stockFilters(query);
   const where = filters.length ? and(...filters) : undefined;
+  const offset = (query.page - 1) * query.pageSize;
+  const base = db.select({
+    averageCost: sql<string>`coalesce(avg(${stock.costPrice}), 0)`,
+    lastAddedAt: sql<number>`max(${stock.timestamp})`,
+    locationId: stock.locationId,
+    locationName: locations.name,
+    productId: stock.productId,
+    productMrpPrice: products.mrpPrice,
+    productName: products.name,
+    productSku: products.sku,
+    quantity: count(stock.id),
+    statusId: stock.status,
+    statusLabel: stockStatuses.label,
+    statusName: stockStatuses.name,
+  }).from(stock)
+    .leftJoin(products, eq(products.id, stock.productId))
+    .leftJoin(locations, eq(locations.id, stock.locationId))
+    .leftJoin(stockStatuses, eq(stockStatuses.id, stock.status));
+  const [rows, [{ total }]] = await Promise.all([
+    base.where(where)
+      .groupBy(stock.productId, products.name, products.sku, products.mrpPrice, stock.locationId, locations.name, stock.status, stockStatuses.name, stockStatuses.label)
+      .orderBy(products.name, locations.name, stockStatuses.label).limit(query.pageSize).offset(offset),
+    db.select({ total: sql<number>`count(distinct concat_ws(':', ${stock.productId}, ${stock.locationId}, ${stock.status}))` }).from(stock)
+      .leftJoin(products, eq(products.id, stock.productId)).where(where),
+  ]);
+  return {
+    items: rows.map((row) => ({ ...row, quantity: Number(row.quantity) })),
+    pagination: { page: query.page, pageSize: query.pageSize, total: Number(total), totalPages: Math.ceil(Number(total) / query.pageSize) },
+  };
+};
+
+export const listStockUnits = async (input: unknown) => {
+  const query = listStockUnitsSchema.parse(input);
+  const filters = await stockFilters(query);
+  filters.push(eq(stock.productId, query.productId));
+  const where = and(...filters);
   const offset = (query.page - 1) * query.pageSize;
   const base = db.select({
     barcode: stock.barcode,
@@ -161,3 +222,79 @@ export const listPendingStockReceipts = async (input: unknown) => {
 
 export const listStockStatuses = async () => db.select({ id: stockStatuses.id, isSellable: stockStatuses.isSellable, label: stockStatuses.label, name: stockStatuses.name })
   .from(stockStatuses).where(eq(stockStatuses.isActive, true)).orderBy(stockStatuses.label);
+
+export const checkStockAvailability = async (input: unknown) => {
+  const { code } = checkStockAvailabilitySchema.parse(input);
+  const barcodeRows = await db.select({
+    averageCost: stock.costPrice,
+    barcode: stock.barcode,
+    grnId: stock.grnId,
+    grnNumber: grns.grnNumber,
+    identifierType: sql<string | null>`'barcode'`,
+    identifierValue: stock.barcode,
+    isSellable: stockStatuses.isSellable,
+    locationId: stock.locationId,
+    locationName: locations.name,
+    productId: stock.productId,
+    productMrpPrice: products.mrpPrice,
+    productName: products.name,
+    productSku: products.sku,
+    statusId: stock.status,
+    statusLabel: stockStatuses.label,
+    statusName: stockStatuses.name,
+    stockId: stock.id,
+    timestamp: stock.timestamp,
+  }).from(stock)
+    .leftJoin(products, eq(products.id, stock.productId))
+    .leftJoin(locations, eq(locations.id, stock.locationId))
+    .leftJoin(stockStatuses, eq(stockStatuses.id, stock.status))
+    .leftJoin(grns, eq(grns.id, stock.grnId))
+    .where(eq(stock.barcode, code))
+    .limit(1);
+
+  const rows = barcodeRows.length ? barcodeRows : await db.select({
+    averageCost: stock.costPrice,
+    barcode: stock.barcode,
+    grnId: stock.grnId,
+    grnNumber: grns.grnNumber,
+    identifierType: stockIdentifiers.type,
+    identifierValue: stockIdentifiers.value,
+    isSellable: stockStatuses.isSellable,
+    locationId: stock.locationId,
+    locationName: locations.name,
+    productId: stock.productId,
+    productMrpPrice: products.mrpPrice,
+    productName: products.name,
+    productSku: products.sku,
+    statusId: stock.status,
+    statusLabel: stockStatuses.label,
+    statusName: stockStatuses.name,
+    stockId: stock.id,
+    timestamp: stock.timestamp,
+  }).from(stockIdentifiers)
+    .innerJoin(stock, eq(stock.id, stockIdentifiers.stockId))
+    .leftJoin(products, eq(products.id, stock.productId))
+    .leftJoin(locations, eq(locations.id, stock.locationId))
+    .leftJoin(stockStatuses, eq(stockStatuses.id, stock.status))
+    .leftJoin(grns, eq(grns.id, stock.grnId))
+    .where(eq(stockIdentifiers.value, code))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) {
+    return {
+      found: false,
+      message: 'No stock unit found for this barcode, IMEI, or serial number.',
+      query: code,
+    };
+  }
+
+  return {
+    found: true,
+    item: row,
+    message: row.isSellable
+      ? `${row.productName ?? 'Stock unit'} is available.`
+      : `${row.productName ?? 'Stock unit'} is not available. Current status: ${row.statusLabel ?? 'Unassigned'}.`,
+    query: code,
+  };
+};

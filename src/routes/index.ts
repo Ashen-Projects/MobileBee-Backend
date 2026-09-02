@@ -11,6 +11,7 @@ import { grnRoutes } from './purchasing/grn/grnRoutes';
 import { documentSequenceRoutes } from './settings/documentSequenceRoutes';
 import { locationRoutes } from './settings/locationRoutes';
 import { stockRoutes } from './inventory/stock/stockRoutes';
+import { saleRoutes } from './pos/saleRoutes';
 import { requireAuth } from '../middlewares/authMiddleware';
 
 export const apiRoutes = Router();
@@ -29,3 +30,4 @@ apiRoutes.use('/grns', grnRoutes);
 apiRoutes.use('/locations', locationRoutes);
 apiRoutes.use('/document-sequences', documentSequenceRoutes);
 apiRoutes.use('/stock', stockRoutes);
+apiRoutes.use('/sales', saleRoutes);
