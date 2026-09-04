@@ -1,12 +1,20 @@
 import { z } from 'zod';
 
 const numericString = z.coerce.number().min(0);
+const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD date format.');
 
 export const listSalesSchema = z.object({
+  fromDate: dateString.optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(10),
   search: z.string().trim().optional().default(''),
   status: z.enum(['all', 'draft', 'completed', 'cancelled', 'returned']).default('all'),
+  toDate: dateString.optional(),
+}).strict();
+
+export const dailySalesSummarySchema = z.object({
+  fromDate: dateString,
+  toDate: dateString,
 }).strict();
 
 export const searchSaleProductsSchema = z.object({

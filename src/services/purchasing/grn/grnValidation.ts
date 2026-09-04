@@ -33,8 +33,10 @@ const receivedItem = z.object({
 }).strict();
 
 export const grnEntityIdSchema = entityId;
+const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 export const listGrnsSchema = z.object({
+  fromDate: dateString.optional(),
   locationId: z.union([entityId, z.literal('all')]).default('all'),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -42,6 +44,7 @@ export const listGrnsSchema = z.object({
   search: z.string().trim().max(255).default(''),
   status: z.enum(['pendingCountApproval', 'pendingFinanceApproval', 'approved', 'declined', 'all']).default('all'),
   supplierId: z.union([entityId, z.literal('all')]).default('all'),
+  toDate: dateString.optional(),
 }).strict();
 
 export const createGrnSchema = z.object({

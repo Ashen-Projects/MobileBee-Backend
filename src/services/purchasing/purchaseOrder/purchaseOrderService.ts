@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, like, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 
 import { db } from '../../../db';
 import {
@@ -29,6 +29,9 @@ import {
 type AuditContext = { ipAddress?: string };
 type OrderItemInput = { productId: number; quantity: number; unitPrice: number };
 type StatusName = (typeof PURCHASE_ORDER_STATUS)[keyof typeof PURCHASE_ORDER_STATUS];
+const COLOMBO_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const startOfColomboDate = (date: string) => Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))) - COLOMBO_OFFSET_MS;
+const endOfColomboDate = (date: string) => startOfColomboDate(date) + 86_399_999;
 
 const audit = (user: AuthenticatedUser, context: AuditContext, values: {
   action: string;
@@ -113,6 +116,8 @@ export const listPurchaseOrders = async (input: unknown) => {
   if (query.locationId !== 'all') filters.push(eq(purchaseOrders.locationId, query.locationId));
   if (query.supplierId !== 'all') filters.push(eq(purchaseOrders.supplierId, query.supplierId));
   if (query.status !== 'all') filters.push(eq(purchaseOrderStatuses.name, query.status));
+  if (query.fromDate) filters.push(sql`${purchaseOrders.timestamp} >= ${startOfColomboDate(query.fromDate)}`);
+  if (query.toDate) filters.push(sql`${purchaseOrders.timestamp} <= ${endOfColomboDate(query.toDate)}`);
   if (query.search) filters.push(or(
     like(purchaseOrders.poNumber, `%${query.search}%`),
     like(suppliers.name, `%${query.search}%`),
