@@ -10,6 +10,10 @@ export const listSales = async (req: Request, res: Response): Promise<void> => {
   res.status(200).json({ success: true, data: await saleService.listSales(req.query) });
 };
 
+export const dailySummary = async (req: Request, res: Response): Promise<void> => {
+  res.status(200).json({ success: true, data: await saleService.dailySummary(req.query) });
+};
+
 export const getSale = async (req: Request, res: Response): Promise<void> => {
   res.status(200).json({ success: true, data: await saleService.getSale(req.params.id) });
 };

@@ -19,12 +19,36 @@ import {
 import { AppError } from '../../../errors/app-error';
 import type { AuthenticatedUser } from '../../auth/authService';
 import { DOCUMENT_TYPES, STOCK_STATUS } from '../../../utils/constants';
-import { createSaleSchema, listSalesSchema, saleIdSchema, searchSaleCustomersSchema, searchSaleProductsSchema } from './saleValidation';
+import { createSaleSchema, dailySalesSummarySchema, listSalesSchema, saleIdSchema, searchSaleCustomersSchema, searchSaleProductsSchema } from './saleValidation';
 
 type AuditContext = { ipAddress?: string };
 
 const currentYear = () => Number(new Intl.DateTimeFormat('en', { timeZone: 'Asia/Colombo', year: 'numeric' }).format(new Date()));
 const money = (value: number) => Number(value.toFixed(2));
+const COLOMBO_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+const startOfColomboDate = (date: string) => {
+  const [year, month, day] = date.split('-').map(Number);
+  return Date.UTC(year, month - 1, day) - COLOMBO_OFFSET_MS;
+};
+
+const endOfColomboDate = (date: string) => startOfColomboDate(date) + 24 * 60 * 60 * 1000 - 1;
+
+const colomboDayKey = (timestamp: number) => {
+  const local = new Date(timestamp + COLOMBO_OFFSET_MS);
+  return `${local.getUTCFullYear()}-${String(local.getUTCMonth() + 1).padStart(2, '0')}-${String(local.getUTCDate()).padStart(2, '0')}`;
+};
+
+const eachColomboDate = (fromDate: string, toDate: string) => {
+  const dates: string[] = [];
+  let cursor = startOfColomboDate(fromDate);
+  const end = startOfColomboDate(toDate);
+  while (cursor <= end) {
+    dates.push(colomboDayKey(cursor + COLOMBO_OFFSET_MS));
+    cursor += 24 * 60 * 60 * 1000;
+  }
+  return dates;
+};
 
 const findStatusId = async (name: string) => {
   const [status] = await db.select({ id: stockStatuses.id }).from(stockStatuses).where(eq(stockStatuses.name, name)).limit(1);
@@ -127,6 +151,8 @@ export const listSales = async (input: unknown) => {
   const query = listSalesSchema.parse(input);
   const filters: SQL[] = [];
   if (query.status !== 'all') filters.push(eq(sales.status, query.status));
+  if (query.fromDate) filters.push(sql`${sales.timestamp} >= ${startOfColomboDate(query.fromDate)}`);
+  if (query.toDate) filters.push(sql`${sales.timestamp} <= ${endOfColomboDate(query.toDate)}`);
   if (query.search) {
     const condition = or(
       like(sales.invoiceNo, `%${query.search}%`),
@@ -158,6 +184,55 @@ export const listSales = async (input: unknown) => {
     db.select({ total: count() }).from(sales).leftJoin(customers, eq(customers.id, sales.customerId)).where(where),
   ]);
   return { items, pagination: { page: query.page, pageSize: query.pageSize, total: Number(total), totalPages: Math.ceil(Number(total) / query.pageSize) } };
+};
+
+export const dailySummary = async (input: unknown) => {
+  const query = dailySalesSummarySchema.parse(input);
+  const fromMs = startOfColomboDate(query.fromDate);
+  const toMs = endOfColomboDate(query.toDate);
+  if (fromMs > toMs) throw new AppError('From date cannot be after to date.', 400);
+  if (toMs - fromMs > 370 * 24 * 60 * 60 * 1000) throw new AppError('Date range cannot be longer than 370 days.', 400);
+
+  const rows = await db.select({
+    discountAmount: sales.discountAmount,
+    paidAmount: sales.paidAmount,
+    status: sales.status,
+    timestamp: sales.timestamp,
+    totalAmount: sales.totalAmount,
+  }).from(sales).where(and(
+    eq(sales.status, 'completed'),
+    sql`${sales.timestamp} >= ${fromMs}`,
+    sql`${sales.timestamp} <= ${toMs}`,
+  )).orderBy(sales.timestamp);
+
+  const byDate = new Map(eachColomboDate(query.fromDate, query.toDate).map((date) => [date, {
+    date,
+    discountAmount: 0,
+    paidAmount: 0,
+    saleCount: 0,
+    totalAmount: 0,
+  }]));
+
+  for (const row of rows) {
+    const date = colomboDayKey(Number(row.timestamp));
+    const summary = byDate.get(date);
+    if (!summary) continue;
+    summary.saleCount += 1;
+    summary.totalAmount = money(summary.totalAmount + Number(row.totalAmount));
+    summary.discountAmount = money(summary.discountAmount + Number(row.discountAmount));
+    summary.paidAmount = money(summary.paidAmount + Number(row.paidAmount));
+  }
+
+  const items = [...byDate.values()];
+  return {
+    items,
+    totals: items.reduce((total, item) => ({
+      discountAmount: money(total.discountAmount + item.discountAmount),
+      paidAmount: money(total.paidAmount + item.paidAmount),
+      saleCount: total.saleCount + item.saleCount,
+      totalAmount: money(total.totalAmount + item.totalAmount),
+    }), { discountAmount: 0, paidAmount: 0, saleCount: 0, totalAmount: 0 }),
+  };
 };
 
 export const getSale = async (input: unknown) => saleDetail(saleIdSchema.parse(input));

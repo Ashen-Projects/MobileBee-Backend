@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 const entityId = z.coerce.number().int().positive();
+const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const note = z.string().trim().max(2_000).optional();
 const item = z.object({
   productId: entityId,
@@ -15,12 +16,14 @@ const uniqueProducts = (items: Array<{ productId: number }>) => (
 export const entityIdSchema = entityId;
 
 export const listPurchaseOrdersSchema = z.object({
+  fromDate: dateString.optional(),
   locationId: z.union([entityId, z.literal('all')]).default('all'),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().max(255).default(''),
   status: z.string().trim().max(100).default('all'),
   supplierId: z.union([entityId, z.literal('all')]).default('all'),
+  toDate: dateString.optional(),
 }).strict();
 
 export const createPurchaseOrderSchema = z.object({
@@ -38,4 +41,3 @@ export const updatePurchaseOrderSchema = z.object({
 }).strict().refine((data) => Object.keys(data).length > 0, 'At least one field is required.');
 
 export const transitionPurchaseOrderSchema = z.object({ note }).strict();
-
