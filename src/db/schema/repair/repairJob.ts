@@ -8,6 +8,7 @@ export const repairJobs = mysqlTable(
   {
     id: int('id').primaryKey().autoincrement(),
     jobNo: varchar('job_no', { length: 100 }).notNull(),
+    publicStatusToken: varchar('public_status_token', { length: 128 }).notNull(),
     customerId: int('customer_id')
       .notNull()
       .references(() => customers.id),
@@ -38,6 +39,7 @@ export const repairJobs = mysqlTable(
   },
   (table) => [
     uniqueIndex('repair_jobs_job_no_uq').on(table.jobNo),
+    uniqueIndex('repair_jobs_public_status_token_uq').on(table.publicStatusToken),
     index('repair_jobs_serial_imei_idx').on(table.serialImei),
     index('repair_jobs_status_idx').on(table.status),
     index('repair_jobs_timestamp_idx').on(table.timestamp),
