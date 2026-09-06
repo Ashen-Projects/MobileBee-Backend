@@ -320,7 +320,9 @@ export const updateProduct = async (idInput: unknown, input: unknown, user: Auth
   await assertUniqueProduct(nextName, nextSku, id);
   const nextLowest = data.lowestSellingPrice ?? current.lowestSellingPrice;
   const nextMrp = data.mrpPrice ?? current.mrpPrice;
-  if (!current.hasVariations && Number(nextLowest) > Number(nextMrp)) throw new AppError('Lowest selling price cannot exceed MRP.', 400);
+  if (!current.hasVariations && Number(nextLowest) > 0 && Number(nextMrp) > 0 && Number(nextLowest) > Number(nextMrp)) {
+    throw new AppError('Lowest selling price cannot exceed MRP.', 400);
+  }
 
   await db.transaction(async (transaction) => {
     let seoId = current.seoId;

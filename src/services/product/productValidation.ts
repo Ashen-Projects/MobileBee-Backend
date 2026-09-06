@@ -5,6 +5,7 @@ const nullableUrl = z.union([z.url().max(1024), z.literal('')]).nullable().optio
   .transform((value) => value === '' ? null : value);
 const money = z.coerce.number().finite().min(0).max(99_999_999.99)
   .transform((value) => value.toFixed(2));
+const optionalMoney = money.optional().default('0.00');
 const optionalId = z.coerce.number().int().positive().nullable().optional();
 
 export const entityIdSchema = z.coerce.number().int().positive();
@@ -47,9 +48,9 @@ const productFields = {
   images: z.array(imageSchema).max(20).default([]),
   isAvailableOnWeb: z.boolean().default(false),
   logoUrl: nullableUrl,
-  lowestSellingPrice: money,
-  maxPurchasingPrice: money,
-  mrpPrice: money,
+  lowestSellingPrice: optionalMoney,
+  maxPurchasingPrice: optionalMoney,
+  mrpPrice: optionalMoney,
   name: z.string().trim().min(1).max(255),
   optionIds: z.array(z.coerce.number().int().positive()).max(30).default([])
     .refine((ids) => new Set(ids).size === ids.length, 'Duplicate attribute options are not allowed.'),
@@ -78,7 +79,8 @@ export const createProductSchema = z.object({
   if (data.images.length > 0 && data.images.filter(({ isPrimary }) => isPrimary).length === 0) {
     context.addIssue({ code: 'custom', message: 'One product image must be selected as primary.', path: ['images'] });
   }
-  if (!data.hasVariations && Number(data.lowestSellingPrice) > Number(data.mrpPrice)) {
+  if (!data.hasVariations && Number(data.lowestSellingPrice) > 0 && Number(data.mrpPrice) > 0
+    && Number(data.lowestSellingPrice) > Number(data.mrpPrice)) {
     context.addIssue({ code: 'custom', message: 'Lowest selling price cannot exceed MRP.', path: ['lowestSellingPrice'] });
   }
 });
@@ -107,6 +109,7 @@ export const updateProductSchema = z.object({
       context.addIssue({ code: 'custom', message: 'Only one primary image is allowed.', path: ['images'] });
     }
     if (data.lowestSellingPrice !== undefined && data.mrpPrice !== undefined
+      && Number(data.lowestSellingPrice) > 0 && Number(data.mrpPrice) > 0
       && Number(data.lowestSellingPrice) > Number(data.mrpPrice)) {
       context.addIssue({ code: 'custom', message: 'Lowest selling price cannot exceed MRP.', path: ['lowestSellingPrice'] });
     }
