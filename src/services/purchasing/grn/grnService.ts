@@ -19,6 +19,7 @@ import {
   stockIdentifiers,
   stockLogs,
   stockStatuses,
+  supplierProducts,
   suppliers,
   users,
 } from '../../../db/schema';
@@ -170,6 +171,8 @@ export const getGrn = async (idInput: unknown) => {
   const [itemRows, stockRows, identifierRows, documents, history, counts] = await Promise.all([
     db.select({
       id: grnItems.id,
+      lowestSellingPrice: products.lowestSellingPrice,
+      mrpPrice: products.mrpPrice,
       productId: grnItems.productId,
       productName: products.name,
       productSku: products.sku,
@@ -265,11 +268,11 @@ export const createGrn = async (input: unknown, user: AuthenticatedUser, context
 
     const orderItems = await transaction.select({
       id: purchaseOrderItems.id,
-      maxPurchasingPrice: products.maxPurchasingPrice,
       orderedQuantity: purchaseOrderItems.quantity,
       productId: purchaseOrderItems.productId,
       productName: products.name,
       receivedQuantity: purchaseOrderItems.receivedQuantity,
+      supplierProductId: purchaseOrderItems.supplierProductId,
     }).from(purchaseOrderItems).innerJoin(products, eq(purchaseOrderItems.productId, products.id))
       .where(eq(purchaseOrderItems.purchaseOrderId, order.id)).for('update');
     const orderItemById = new Map(orderItems.map((item) => [item.id, item]));
@@ -292,9 +295,6 @@ export const createGrn = async (input: unknown, user: AuthenticatedUser, context
       const remaining = orderItem.orderedQuantity - orderItem.receivedQuantity - (pendingByItem.get(orderItem.id) ?? 0);
       if (item.quantity > remaining) {
         throw new AppError(`Received quantity for '${orderItem.productName}' exceeds the remaining quantity of ${remaining}.`, 409);
-      }
-      if (item.unitCost > Number(orderItem.maxPurchasingPrice)) {
-        throw new AppError(`Unit cost for '${orderItem.productName}' exceeds its maximum purchasing price.`, 400);
       }
       totalCents += Math.round(item.unitCost * 100) * item.quantity;
     }
@@ -344,6 +344,10 @@ export const createGrn = async (input: unknown, user: AuthenticatedUser, context
         totalAmount,
         unitCost: money(item.unitCost),
       });
+      await transaction.update(supplierProducts).set({
+        lastPurchasingPrice: money(item.unitCost),
+        timestamp,
+      }).where(eq(supplierProducts.id, orderItem.supplierProductId));
     }
     if (data.documents.length) {
       await transaction.insert(grnDocuments).values(data.documents.map((document) => ({
@@ -574,6 +578,40 @@ export const addGrnStock = async (idInput: unknown, input: unknown, user: Authen
       }
     }
 
+    const stockedProductIds = Array.from(new Set(data.items.map((item) => receivedById.get(item.grnItemId)!.productId)));
+    const priceUpdatesByProduct = new Map(data.priceUpdates.map((item) => [item.productId, item]));
+    for (const productId of priceUpdatesByProduct.keys()) {
+      if (!stockedProductIds.includes(productId)) {
+        throw new AppError(`Product ${productId} is not included in this stock addition.`, 400);
+      }
+    }
+    const productRows = await transaction.select({
+      id: products.id,
+      lowestSellingPrice: products.lowestSellingPrice,
+      mrpPrice: products.mrpPrice,
+      name: products.name,
+    }).from(products).where(inArray(products.id, stockedProductIds)).for('update');
+    const productById = new Map(productRows.map((product) => [product.id, product]));
+    for (const productId of stockedProductIds) {
+      const product = productById.get(productId);
+      if (!product) throw new AppError(`Product ${productId} does not exist.`, 400);
+      const priceUpdate = priceUpdatesByProduct.get(productId);
+      const lowestSellingPrice = priceUpdate?.lowestSellingPrice ?? product.lowestSellingPrice;
+      const mrpPrice = priceUpdate?.mrpPrice ?? product.mrpPrice;
+      if (Number(lowestSellingPrice) <= 0 || Number(mrpPrice) <= 0) {
+        throw new AppError(`Set MRP and lowest selling price for '${product.name}' before adding it to stock.`, 400);
+      }
+      if (Number(lowestSellingPrice) > Number(mrpPrice)) {
+        throw new AppError(`Lowest selling price cannot exceed MRP for '${product.name}'.`, 400);
+      }
+      if (priceUpdate) {
+        await transaction.update(products).set({
+          lowestSellingPrice,
+          mrpPrice,
+        }).where(eq(products.id, productId));
+      }
+    }
+
     const generatedCount = data.items.flatMap(({ units }) => units).filter(({ generateBarcode }) => generateBarcode).length;
     let generatedStart = 0;
     const year = currentYear();
@@ -653,7 +691,10 @@ export const addGrnStock = async (idInput: unknown, input: unknown, user: Authen
     });
     await transaction.insert(auditLogs).values(audit(user, context, {
       action: 'stock_added', entityId: id,
-      newValues: { units: data.items.reduce((sum, item) => sum + item.units.length, 0) },
+      newValues: {
+        priceUpdates: data.priceUpdates,
+        units: data.items.reduce((sum, item) => sum + item.units.length, 0),
+      },
     }));
   });
   return getGrn(id);

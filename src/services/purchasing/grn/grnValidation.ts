@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 const entityId = z.coerce.number().int().positive();
 const money = z.coerce.number().finite().positive().max(9_999_999_999.99);
+const stockPrice = z.coerce.number().finite().positive().max(99_999_999.99)
+  .transform((value) => value.toFixed(2));
 const code = z.string().trim().min(1).max(64);
 
 const identifier = z.object({
@@ -77,6 +79,16 @@ export const addGrnStockSchema = z.object({
     units: z.array(unit).min(1).max(100_000),
   }).strict()).min(1).max(500)
     .refine((items) => new Set(items.map(({ grnItemId }) => grnItemId)).size === items.length, 'A GRN item can appear only once.'),
+  priceUpdates: z.array(z.object({
+    lowestSellingPrice: stockPrice,
+    mrpPrice: stockPrice,
+    productId: entityId,
+  }).strict().superRefine((value, context) => {
+    if (Number(value.lowestSellingPrice) > Number(value.mrpPrice)) {
+      context.addIssue({ code: 'custom', message: 'Lowest selling price cannot exceed MRP.', path: ['lowestSellingPrice'] });
+    }
+  })).max(500).optional().default([])
+    .refine((items) => new Set(items.map(({ productId }) => productId)).size === items.length, 'A product price can be updated only once.'),
 }).strict();
 
 export const financeDecisionSchema = z.object({

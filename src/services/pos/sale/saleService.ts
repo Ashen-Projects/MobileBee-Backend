@@ -6,6 +6,7 @@ import {
   customers,
   documentSequences,
   locations,
+  posDrawers,
   products,
   saleItems,
   saleItemStock,
@@ -82,6 +83,7 @@ const saleDetail = async (id: number) => {
     customerName: customers.name,
     customerPhone: customers.phone,
     discountAmount: sales.discountAmount,
+    drawerId: sales.drawerId,
     id: sales.id,
     invoiceNo: sales.invoiceNo,
     locationId: sales.locationId,
@@ -168,6 +170,7 @@ export const listSales = async (input: unknown) => {
       customerId: sales.customerId,
       customerName: customers.name,
       discountAmount: sales.discountAmount,
+      drawerId: sales.drawerId,
       id: sales.id,
       invoiceNo: sales.invoiceNo,
       locationName: locations.name,
@@ -245,6 +248,7 @@ export const searchProducts = async (input: unknown, user: AuthenticatedUser) =>
   const statusId = await findStatusId(STOCK_STATUS.AVAILABLE);
   const barcodeRows = await db.select({
     barcode: stock.barcode,
+    costPrice: stock.costPrice,
     locationId: stock.locationId,
     locationName: locations.name,
     mrpPrice: products.mrpPrice,
@@ -266,6 +270,7 @@ export const searchProducts = async (input: unknown, user: AuthenticatedUser) =>
   }
   const identifierRows = await db.select({
     barcode: stock.barcode,
+    costPrice: stock.costPrice,
     locationId: stock.locationId,
     locationName: locations.name,
     matchType: stockIdentifiers.type,
@@ -293,6 +298,7 @@ export const searchProducts = async (input: unknown, user: AuthenticatedUser) =>
     or(like(products.name, `%${query.search}%`), like(products.sku, `%${query.search}%`)),
   ].filter((condition): condition is SQL => Boolean(condition));
   const rows = await db.select({
+    costPrice: sql<string>`coalesce(avg(${stock.costPrice}), 0)`,
     locationId: stock.locationId,
     locationName: locations.name,
     mrpPrice: products.mrpPrice,
@@ -338,8 +344,18 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
   const createdSaleId = await db.transaction(async (transaction) => {
     const soldStatusId = await findStatusId(STOCK_STATUS.SOLD);
     const availableStatusId = await findStatusId(STOCK_STATUS.AVAILABLE);
+    const [activeDrawer] = await transaction.select({
+      id: posDrawers.id,
+      locationId: posDrawers.locationId,
+    }).from(posDrawers)
+      .where(and(eq(posDrawers.userId, user.id), eq(posDrawers.locationId, saleLocationId), eq(posDrawers.status, 'open')))
+      .limit(1)
+      .for('update');
+    if (!activeDrawer) throw new AppError('Open your POS drawer before creating a sale.', 409);
+
     const selectedStock = requestedStockIds.length ? await transaction.select({
       id: stock.id,
+      costPrice: stock.costPrice,
       locationId: stock.locationId,
       productId: stock.productId,
       status: stock.status,
@@ -357,8 +373,34 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
     }, new Map<number, number[]>());
     for (const item of data.items) {
       if (item.stockIds.length !== item.quantity) throw new AppError('Selected stock unit count must match item quantity.', 400);
+      const selectedForItem = selectedStock.filter((unit) => item.stockIds.includes(unit.id));
+      if (selectedForItem.length !== item.quantity || selectedForItem.some((unit) => unit.productId !== item.productId)) {
+        throw new AppError('Selected stock units do not match the sale product.', 400);
+      }
       const availableForProduct = stockByProduct.get(item.productId) ?? [];
       if (availableForProduct.length < item.quantity) throw new AppError('Selected stock units do not match the sale product.', 400);
+    }
+
+    const productIds = Array.from(new Set(data.items.map((item) => item.productId)));
+    const priceRows = productIds.length ? await transaction.select({
+      id: products.id,
+      lowestSellingPrice: products.lowestSellingPrice,
+      mrpPrice: products.mrpPrice,
+      name: products.name,
+    }).from(products).where(inArray(products.id, productIds)) : [];
+    const productPrices = new Map(priceRows.map((product) => [product.id, product]));
+    let minimumAllowedTotal = 0;
+    for (const item of data.items) {
+      const product = productPrices.get(item.productId);
+      if (!product) throw new AppError(`Product ${item.productId} does not exist.`, 400);
+      const lowestSellingPrice = Number(product.lowestSellingPrice);
+      const mrpPrice = Number(product.mrpPrice);
+      if (lowestSellingPrice <= 0 || mrpPrice <= 0) throw new AppError(`Selling prices are not configured for '${product.name}'.`, 400);
+      const lineTotal = item.unitPrice * item.quantity - item.discountAmount;
+      const lineMinimum = lowestSellingPrice * item.quantity;
+      if (item.unitPrice > mrpPrice) throw new AppError(`Unit price for '${product.name}' cannot exceed MRP.`, 400);
+      if (lineTotal < lineMinimum) throw new AppError(`Discount for '${product.name}' cannot reduce price below lowest selling price.`, 400);
+      minimumAllowedTotal += lineMinimum;
     }
 
     let customerId = data.customer?.id ?? null;
@@ -381,12 +423,16 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
     const subTotal = money(data.items.reduce((total, item) => total + (item.unitPrice * item.quantity), 0));
     const itemDiscountTotal = money(data.items.reduce((total, item) => total + item.discountAmount, 0));
     const totalAmount = money(Math.max(0, subTotal - itemDiscountTotal - data.discountAmount));
+    if (totalAmount < money(minimumAllowedTotal)) {
+      throw new AppError('Sale discount cannot reduce the invoice below the lowest selling price.', 400);
+    }
     if (data.payment.amount < totalAmount) throw new AppError('Paid amount cannot be less than sale total.', 400);
 
     const timestamp = Date.now();
     const result = await transaction.insert(sales).values({
       customerId,
       discountAmount: String(data.discountAmount),
+      drawerId: activeDrawer.id,
       invoiceNo,
       locationId: saleLocationId,
       paidAmount: String(data.payment.amount),

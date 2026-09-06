@@ -89,9 +89,6 @@ const validateOrderSelection = async (supplierId: number, locationId: number, it
     if (item.quantity < link.minimumOrderQty) {
       throw new AppError(`'${product.name}' requires a minimum order quantity of ${link.minimumOrderQty}.`, 400);
     }
-    if (item.unitPrice > Number(product.maxPurchasingPrice)) {
-      throw new AppError(`Expected price for '${product.name}' exceeds its maximum purchasing price.`, 400);
-    }
     const unitCents = Math.round(item.unitPrice * 100);
     const itemTotalCents = unitCents * item.quantity;
     totalCents += itemTotalCents;

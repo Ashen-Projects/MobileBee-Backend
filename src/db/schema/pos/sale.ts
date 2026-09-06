@@ -2,6 +2,7 @@ import { bigint, decimal, index, int, mysqlEnum, mysqlTable, uniqueIndex, varcha
 import { users } from '../user/user';
 import { locations } from '../settings/location';
 import { customers } from '../customer/customer';
+import { posDrawers } from './drawer';
 
 export const sales = mysqlTable(
   'sales',
@@ -16,6 +17,7 @@ export const sales = mysqlTable(
     userId: int('user_id')
       .notNull()
       .references(() => users.id),
+    drawerId: int('drawer_id').references(() => posDrawers.id),
     subTotal: decimal('sub_total', { precision: 12, scale: 2 }).notNull(),
     discountAmount: decimal('discount_amount', { precision: 12, scale: 2 }).notNull().default('0.00'),
     totalAmount: decimal('total_amount', { precision: 12, scale: 2 }).notNull(),
@@ -26,5 +28,6 @@ export const sales = mysqlTable(
     uniqueIndex('sales_invoice_no_uq').on(table.invoiceNo),
     index('sales_timestamp_idx').on(table.timestamp),
     index('sales_status_idx').on(table.status),
+    index('sales_drawer_id_idx').on(table.drawerId),
   ],
 );
