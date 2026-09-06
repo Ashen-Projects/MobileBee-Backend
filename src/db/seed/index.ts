@@ -161,6 +161,21 @@ export const seedDatabase = async (): Promise<void> => {
       module: 'locations',
     },
     {
+      description: 'View customer profiles and contact information.',
+      key: USER_PERMISSIONS.CUSTOMERS_VIEW,
+      module: 'customers',
+    },
+    {
+      description: 'Create customer profiles.',
+      key: USER_PERMISSIONS.CUSTOMERS_CREATE,
+      module: 'customers',
+    },
+    {
+      description: 'Update customer profiles and active status.',
+      key: USER_PERMISSIONS.CUSTOMERS_UPDATE,
+      module: 'customers',
+    },
+    {
       description: 'View document numbering sequences.',
       key: USER_PERMISSIONS.DOCUMENT_SEQUENCES_VIEW,
       module: 'document_sequences',
@@ -249,6 +264,21 @@ export const seedDatabase = async (): Promise<void> => {
       description: 'Create customer sales, allocate available stock, accept payment, and issue invoices.',
       key: USER_PERMISSIONS.SALES_CREATE,
       module: 'sales',
+    },
+    {
+      description: 'View customer repair jobs, current stage, device details, and repair history.',
+      key: USER_PERMISSIONS.REPAIRS_VIEW,
+      module: 'repairs',
+    },
+    {
+      description: 'Create repair jobs and issue customer repair receipts.',
+      key: USER_PERMISSIONS.REPAIRS_CREATE,
+      module: 'repairs',
+    },
+    {
+      description: 'Update repair job stages and repair progress history.',
+      key: USER_PERMISSIONS.REPAIRS_UPDATE,
+      module: 'repairs',
     },
     {
       description: 'View purchase orders and their workflow history.',
