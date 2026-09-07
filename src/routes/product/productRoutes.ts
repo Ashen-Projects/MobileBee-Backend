@@ -22,6 +22,7 @@ productRoutes.patch('/attribute-options/:id', requirePermission(USER_PERMISSIONS
 
 productRoutes.get('/', requirePermission(USER_PERMISSIONS.PRODUCTS_VIEW), asyncHandler(controller.listProducts));
 productRoutes.post('/', requirePermission(USER_PERMISSIONS.PRODUCTS_CREATE), asyncHandler(controller.createProduct));
+productRoutes.get('/stock-level-locations', requirePermission(USER_PERMISSIONS.PRODUCTS_VIEW), asyncHandler(controller.listStockLevelLocations));
 productRoutes.get('/:id', requirePermission(USER_PERMISSIONS.PRODUCTS_VIEW), asyncHandler(controller.getProduct));
 productRoutes.patch('/:id/status', requirePermission(USER_PERMISSIONS.PRODUCTS_UPDATE), asyncHandler(controller.setProductStatus));
 productRoutes.patch('/:id', requirePermission(USER_PERMISSIONS.PRODUCTS_UPDATE), asyncHandler(controller.updateProduct));

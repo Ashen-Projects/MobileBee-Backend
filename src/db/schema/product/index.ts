@@ -4,5 +4,6 @@ export * from './productAttributeOption';
 export * from './productCategory';
 export * from './productCategoryRequiredAttribute';
 export * from './productImage';
+export * from './productLocationStockLevel';
 export * from './productProductAttributeOption';
 export * from './seo';

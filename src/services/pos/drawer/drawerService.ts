@@ -4,7 +4,9 @@ import { db } from '../../../db';
 import { auditLogs, locations, posDrawers, salePayments, sales, users } from '../../../db/schema';
 import { AppError } from '../../../errors/app-error';
 import type { AuthenticatedUser } from '../../auth/authService';
+import { safeCreateNotification } from '../../notification/notificationService';
 import { closeDrawerSchema, openDrawerSchema } from './drawerValidation';
+import { USER_PERMISSIONS } from '../../../utils/constants';
 
 type AuditContext = { ipAddress?: string };
 
@@ -79,6 +81,16 @@ export const openDrawer = async (input: unknown, user: AuthenticatedUser, contex
   });
   const drawer = await getCurrentDrawer(user);
   if (!drawer || drawer.id !== drawerId) throw new AppError('POS drawer opened but could not be loaded.', 500);
+  await safeCreateNotification({
+    entityId: drawer.id,
+    entityType: 'pos_drawer',
+    locationId,
+    message: `${drawer.userName} opened the POS drawer with LKR ${money(Number(drawer.openingCash)).toLocaleString('en-LK', { minimumFractionDigits: 2 })}.`,
+    module: 'sales',
+    severity: 'info',
+    targetPermission: USER_PERMISSIONS.SALES_VIEW,
+    title: 'POS drawer opened',
+  }, user.id);
   return drawer;
 };
 
@@ -144,9 +156,22 @@ export const closeDrawer = async (input: unknown, user: AuthenticatedUser, conte
     return { id: drawer.id, openingCash: Number(drawer.openingCash) };
   });
   const summary = await drawerSummary(closed.id, closed.openingCash, data.cashExpenseAmount);
+  const difference = money(data.countedCash - summary.expectedCash);
+  await safeCreateNotification({
+    entityId: closed.id,
+    entityType: 'pos_drawer',
+    locationId,
+    message: difference === 0
+      ? `Drawer closed with no cash difference. Sales total LKR ${summary.totalAmount.toLocaleString('en-LK', { minimumFractionDigits: 2 })}.`
+      : `Drawer closed with ${difference > 0 ? 'over' : 'short'} difference of LKR ${Math.abs(difference).toLocaleString('en-LK', { minimumFractionDigits: 2 })}. Expected cash LKR ${summary.expectedCash.toLocaleString('en-LK', { minimumFractionDigits: 2 })}, counted LKR ${money(data.countedCash).toLocaleString('en-LK', { minimumFractionDigits: 2 })}.`,
+    module: 'sales',
+    severity: difference === 0 ? 'success' : 'critical',
+    targetPermission: USER_PERMISSIONS.SALES_VIEW,
+    title: difference === 0 ? 'POS drawer closed' : 'Drawer cash mismatch',
+  }, user.id);
   return {
     drawerId: closed.id,
-    difference: money(data.countedCash - summary.expectedCash),
+    difference,
     summary,
   };
 };

@@ -13,6 +13,9 @@ export const listProducts = async (req: Request, res: Response): Promise<void> =
 export const getProduct = async (req: Request, res: Response): Promise<void> => {
     res.status(200).json({success: true, data: await productService.getProduct(req.params.id)});
 };
+export const listStockLevelLocations = async (_req: Request, res: Response): Promise<void> => {
+    res.status(200).json({success: true, data: await productService.listStockLevelLocations()});
+};
 export const createProduct = async (req: Request, res: Response): Promise<void> => {
     res.status(201).json({
         success: true,

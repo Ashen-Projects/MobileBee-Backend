@@ -113,6 +113,20 @@
       "when": 1788591600000,
       "tag": "0015_repair_public_status_token",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1788706800000,
+      "tag": "0016_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1788798764000,
+      "tag": "0017_product_location_stock_levels",
+      "breakpoints": true
     }
   ]
 }
