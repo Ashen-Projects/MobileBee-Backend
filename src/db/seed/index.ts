@@ -146,6 +146,61 @@ export const seedDatabase = async (): Promise<void> => {
       module: 'dashboard',
     },
     {
+      description: 'View official dashboard targets and insight thresholds.',
+      key: USER_PERMISSIONS.DASHBOARD_CONTROLS_VIEW,
+      module: 'dashboard',
+    },
+    {
+      description: 'Set official dashboard targets and insight thresholds. Grant only to trusted management roles.',
+      key: USER_PERMISSIONS.DASHBOARD_CONTROLS_UPDATE,
+      module: 'dashboard',
+    },
+    {
+      description: 'Resolve or dismiss dashboard insights with an auditable note.',
+      key: USER_PERMISSIONS.DASHBOARD_INSIGHTS_ACTION,
+      module: 'dashboard',
+    },
+    {
+      description: 'View assigned-location sales KPIs, trends, payment mix, discounts, and top products on the dashboard.',
+      key: USER_PERMISSIONS.DASHBOARD_SALES_VIEW,
+      module: 'dashboard',
+    },
+    {
+      description: 'View detailed sales forecasts, forecast accuracy, demand patterns, and planning recommendations. Grant only to management roles.',
+      key: USER_PERMISSIONS.DASHBOARD_FORECAST_VIEW,
+      module: 'dashboard',
+    },
+    {
+      description: 'View assigned-location stock availability and stock attention indicators on the dashboard.',
+      key: USER_PERMISSIONS.DASHBOARD_INVENTORY_VIEW,
+      module: 'dashboard',
+    },
+    {
+      description: 'View assigned-location repair workload and stage indicators on the dashboard.',
+      key: USER_PERMISSIONS.DASHBOARD_REPAIRS_VIEW,
+      module: 'dashboard',
+    },
+    {
+      description: 'View assigned-location purchasing and GRN workflow indicators on the dashboard.',
+      key: USER_PERMISSIONS.DASHBOARD_PURCHASING_VIEW,
+      module: 'dashboard',
+    },
+    {
+      description: 'View gross profit and cost-of-goods values on the dashboard. Grant only to trusted financial roles.',
+      key: USER_PERMISSIONS.DASHBOARD_PROFIT_VIEW,
+      module: 'dashboard',
+    },
+    {
+      description: 'View stock cost, stock retail value, purchase cost, paid purchasing totals, and supplier balances on the dashboard.',
+      key: USER_PERMISSIONS.DASHBOARD_COST_VIEW,
+      module: 'dashboard',
+    },
+    {
+      description: 'View dashboard metrics across all active business locations and use the dashboard location filter.',
+      key: USER_PERMISSIONS.DASHBOARD_ALL_LOCATIONS_VIEW,
+      module: 'dashboard',
+    },
+    {
       description: 'View business locations.',
       key: USER_PERMISSIONS.LOCATIONS_VIEW,
       module: 'locations',

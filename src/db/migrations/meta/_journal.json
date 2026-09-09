@@ -127,6 +127,13 @@
       "when": 1788798764000,
       "tag": "0017_product_location_stock_levels",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1788888940556,
+      "tag": "0018_dashboard_controls",
+      "breakpoints": true
     }
   ]
 }

@@ -15,11 +15,13 @@ import {
   sales,
   stock,
   stockStatuses,
-  users,
 } from '../../db/schema';
+import { AppError } from '../../errors/app-error';
 import { STOCK_STATUS, USER_PERMISSIONS } from '../../utils/constants';
 import type { AuthenticatedUser } from '../auth/authService';
 import { isAdministrator, resolveLocationScope, type LocationScope } from '../shared/locationAccess';
+import { getDashboardInsights } from './dashboardInsightService';
+import { getDashboardForecast } from './dashboardForecastService';
 import { dashboardQuerySchema } from './dashboardValidation';
 
 const DAY_MS = 86_400_000;
@@ -38,6 +40,20 @@ const todayInColombo = () => {
 };
 const hasPermission = (user: AuthenticatedUser, permission: string) =>
   isAdministrator(user) || user.permissions.includes(permission);
+const resolveDashboardLocationScope = async (
+  requestedLocationId: number | 'all',
+  user: AuthenticatedUser,
+  canViewAllLocations: boolean,
+): Promise<LocationScope> => {
+  if (!canViewAllLocations) return resolveLocationScope(requestedLocationId, user);
+  if (requestedLocationId === 'all') return 'all';
+
+  const [location] = await db.select({ id: locations.id }).from(locations)
+    .where(and(eq(locations.id, requestedLocationId), eq(locations.isActive, true)))
+    .limit(1);
+  if (!location) throw new AppError('The selected dashboard location is unavailable.', 404);
+  return location.id;
+};
 const locationFilters = (column: SQL.Aliased | any, scope: LocationScope): SQL[] =>
   scope === 'all' ? [] : [eq(column, scope)];
 const percentageChange = (current: number, previous: number) => {
@@ -243,53 +259,54 @@ const purchasingSection = async (fromDate: string, toDate: string, scope: Locati
   };
 };
 
-const drawerSection = async (scope: LocationScope, user: AuthenticatedUser) => {
-  const userFilter = isAdministrator(user) ? [] : [eq(posDrawers.userId, user.id)];
-  const rows = await db.select({
-    id: posDrawers.id,
-    locationId: posDrawers.locationId,
-    locationName: locations.name,
-    openedAt: posDrawers.openedAt,
-    openingCash: posDrawers.openingCash,
-    userId: posDrawers.userId,
-    userName: users.displayName,
-  }).from(posDrawers)
-    .innerJoin(locations, eq(locations.id, posDrawers.locationId))
-    .innerJoin(users, eq(users.id, posDrawers.userId))
-    .where(and(eq(posDrawers.status, 'open'), ...locationFilters(posDrawers.locationId, scope), ...userFilter))
-    .orderBy(asc(posDrawers.openedAt));
-  return { openCount: rows.length, openDrawers: rows.map((row) => ({ ...row, openingCash: money(row.openingCash) })) };
+const drawerSection = async (scope: LocationScope, user: AuthenticatedUser, canViewAllLocations: boolean) => {
+  const userFilter = isAdministrator(user) || canViewAllLocations ? [] : [eq(posDrawers.userId, user.id)];
+  const rows = await db.select({ id: posDrawers.id }).from(posDrawers)
+    .where(and(eq(posDrawers.status, 'open'), ...locationFilters(posDrawers.locationId, scope), ...userFilter));
+  return { openCount: rows.length };
 };
 
 export const getOverview = async (input: unknown, user: AuthenticatedUser) => {
   const parsed = dashboardQuerySchema.parse(input);
   const fromDate = parsed.fromDate ?? todayInColombo();
   const toDate = parsed.toDate ?? fromDate;
-  const scope = await resolveLocationScope(parsed.locationId, user);
-  const admin = isAdministrator(user);
   const visibility = {
-    financials: admin,
-    inventory: hasPermission(user, USER_PERMISSIONS.STOCK_VIEW),
-    purchasing: hasPermission(user, USER_PERMISSIONS.GRNS_VIEW),
-    repairs: hasPermission(user, USER_PERMISSIONS.REPAIRS_VIEW),
-    sales: hasPermission(user, USER_PERMISSIONS.SALES_VIEW),
+    allLocations: hasPermission(user, USER_PERMISSIONS.DASHBOARD_ALL_LOCATIONS_VIEW),
+    forecastDetails: hasPermission(user, USER_PERMISSIONS.DASHBOARD_FORECAST_VIEW),
+    inventory: hasPermission(user, USER_PERMISSIONS.DASHBOARD_INVENTORY_VIEW),
+    inventoryCost: hasPermission(user, USER_PERMISSIONS.DASHBOARD_COST_VIEW),
+    purchasing: hasPermission(user, USER_PERMISSIONS.DASHBOARD_PURCHASING_VIEW),
+    purchasingCost: hasPermission(user, USER_PERMISSIONS.DASHBOARD_COST_VIEW),
+    repairs: hasPermission(user, USER_PERMISSIONS.DASHBOARD_REPAIRS_VIEW),
+    sales: hasPermission(user, USER_PERMISSIONS.DASHBOARD_SALES_VIEW),
+    salesProfit: hasPermission(user, USER_PERMISSIONS.DASHBOARD_PROFIT_VIEW),
   };
+  const scope = await resolveDashboardLocationScope(parsed.locationId, user, visibility.allLocations);
 
-  const [locationRows, salesData, inventoryData, repairsData, purchasingData, drawerData] = await Promise.all([
+  const [locationRows, availableLocations, salesData, inventoryData, repairsData, purchasingData, drawerData, insights, forecast] = await Promise.all([
     scope === 'all'
       ? Promise.resolve([])
       : db.select({ id: locations.id, name: locations.name }).from(locations).where(eq(locations.id, scope)).limit(1),
-    visibility.sales ? salesSection(fromDate, toDate, scope, visibility.financials) : Promise.resolve(null),
-    visibility.inventory ? inventorySection(scope, visibility.financials) : Promise.resolve(null),
+    visibility.allLocations
+      ? db.select({ id: locations.id, name: locations.name }).from(locations)
+        .where(eq(locations.isActive, true)).orderBy(asc(locations.name))
+      : Promise.resolve([]),
+    visibility.sales ? salesSection(fromDate, toDate, scope, visibility.salesProfit) : Promise.resolve(null),
+    visibility.inventory ? inventorySection(scope, visibility.inventoryCost) : Promise.resolve(null),
     visibility.repairs ? repairsSection(fromDate, toDate, scope) : Promise.resolve(null),
-    visibility.purchasing ? purchasingSection(fromDate, toDate, scope, visibility.financials) : Promise.resolve(null),
-    visibility.sales ? drawerSection(scope, user) : Promise.resolve(null),
+    visibility.purchasing ? purchasingSection(fromDate, toDate, scope, visibility.purchasingCost) : Promise.resolve(null),
+    visibility.sales ? drawerSection(scope, user, visibility.allLocations) : Promise.resolve(null),
+    getDashboardInsights(scope, visibility),
+    visibility.sales ? getDashboardForecast(scope, todayInColombo(), visibility.forecastDetails) : Promise.resolve(null),
   ]);
 
   return {
     drawers: drawerData,
+    forecast,
+    insights,
     inventory: inventoryData,
     meta: {
+      availableLocations,
       fromDate,
       generatedAt: Date.now(),
       location: scope === 'all' ? { id: 'all' as const, name: 'All locations' } : { id: scope, name: locationRows[0]?.name ?? 'Assigned location' },
