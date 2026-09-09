@@ -15,6 +15,9 @@ import { stockRoutes } from './inventory/stock/stockRoutes';
 import { saleRoutes } from './pos/saleRoutes';
 import { drawerRoutes } from './pos/drawerRoutes';
 import { publicRepairStatusRoutes, repairRoutes } from './repair/repairRoutes';
+import { reportRoutes } from './reports/reportRoutes';
+import { notificationRoutes } from './notification/notificationRoutes';
+import { dashboardRoutes } from './dashboard/dashboardRoutes';
 import { requireAuth } from '../middlewares/authMiddleware';
 
 export const apiRoutes = Router();
@@ -38,3 +41,6 @@ apiRoutes.use('/stock', stockRoutes);
 apiRoutes.use('/pos-drawers', drawerRoutes);
 apiRoutes.use('/sales', saleRoutes);
 apiRoutes.use('/repairs', repairRoutes);
+apiRoutes.use('/reports', reportRoutes);
+apiRoutes.use('/notifications', notificationRoutes);
+apiRoutes.use('/dashboard', dashboardRoutes);

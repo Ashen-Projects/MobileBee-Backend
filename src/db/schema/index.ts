@@ -1,5 +1,7 @@
 export * from './audit';
 export * from './customer';
+export * from './dashboard';
+export * from './notification';
 export * from './pos';
 export * from './product';
 export * from './purchasing';

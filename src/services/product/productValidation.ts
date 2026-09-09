@@ -7,6 +7,12 @@ const money = z.coerce.number().finite().min(0).max(99_999_999.99)
   .transform((value) => value.toFixed(2));
 const optionalMoney = money.optional().default('0.00');
 const optionalId = z.coerce.number().int().positive().nullable().optional();
+const stockLevelSchema = z.object({
+  locationId: z.coerce.number().int().positive(),
+  minimumStockLevel: z.coerce.number().int().min(0).max(1_000_000),
+}).strict();
+const stockLevelsSchema = z.array(stockLevelSchema).max(500)
+  .refine((rows) => new Set(rows.map(({ locationId }) => locationId)).size === rows.length, 'Duplicate stock alert locations are not allowed.');
 
 export const entityIdSchema = z.coerce.number().int().positive();
 
@@ -59,6 +65,7 @@ const productFields = {
   shortDescription: nullableText(1024),
   sku: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/).nullable().optional()
     .transform((value) => typeof value === 'string' ? value.toUpperCase() : value),
+  stockLevels: stockLevelsSchema.default([]),
 };
 
 export const createProductSchema = z.object({
@@ -72,6 +79,9 @@ export const createProductSchema = z.object({
   }
   if (!data.parentId && data.hasVariations && data.optionIds.length > 0) {
     context.addIssue({ code: 'custom', message: 'A variable parent product cannot have attribute options.', path: ['optionIds'] });
+  }
+  if (!data.parentId && data.hasVariations && data.stockLevels.length > 0) {
+    context.addIssue({ code: 'custom', message: 'Stock alert levels must be configured on sellable variations, not the parent product.', path: ['stockLevels'] });
   }
   if (data.images.filter(({ isPrimary }) => isPrimary).length > 1) {
     context.addIssue({ code: 'custom', message: 'Only one primary image is allowed.', path: ['images'] });
@@ -103,6 +113,7 @@ export const updateProductSchema = z.object({
   shortDescription: nullableText(1024),
   sku: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/).nullable().optional()
     .transform((value) => typeof value === 'string' ? value.toUpperCase() : value),
+  stockLevels: stockLevelsSchema.optional(),
 }).strict().refine((data) => Object.keys(data).length > 0, 'At least one field is required.')
   .superRefine((data, context) => {
     if (data.images && data.images.filter(({ isPrimary }) => isPrimary).length > 1) {

@@ -5,6 +5,8 @@ import { db } from '../../db';
 import { auditLogs, customers, locations, repairHistory, repairJobs, users } from '../../db/schema';
 import { AppError } from '../../errors/app-error';
 import type { AuthenticatedUser } from '../auth/authService';
+import { safeCreateNotification } from '../notification/notificationService';
+import { USER_PERMISSIONS } from '../../utils/constants';
 import { createRepairJobSchema, listRepairJobsSchema, publicRepairStatusSchema, repairJobIdSchema, updateRepairStatusSchema } from './repairValidation';
 
 type AuditContext = { ipAddress?: string };
@@ -182,7 +184,18 @@ export const createRepairJob = async (input: unknown, user: AuthenticatedUser, c
     });
     return repairJobId;
   });
-  return repairDetail(createdId);
+  const detail = await repairDetail(createdId);
+  await safeCreateNotification({
+    entityId: detail.id,
+    entityType: 'repair_job',
+    locationId: detail.locationId,
+    message: `${detail.jobNo} received for ${detail.customerName}. Device: ${detail.deviceName}.`,
+    module: 'repairs',
+    severity: 'info',
+    targetPermission: USER_PERMISSIONS.REPAIRS_VIEW,
+    title: 'New repair job',
+  }, user.id);
+  return detail;
 };
 
 export const updateRepairStatus = async (idInput: unknown, input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
@@ -207,7 +220,18 @@ export const updateRepairStatus = async (idInput: unknown, input: unknown, user:
       userId: user.id,
     });
   });
-  return repairDetail(id);
+  const detail = await repairDetail(id);
+  await safeCreateNotification({
+    entityId: detail.id,
+    entityType: 'repair_job',
+    locationId: detail.locationId,
+    message: `${detail.jobNo} moved from ${statusLabels[job.status as RepairStatus] ?? job.status} to ${statusLabels[detail.status as RepairStatus] ?? detail.status}.`,
+    module: 'repairs',
+    severity: data.status === 'completed' ? 'success' : data.status === 'cancelled' ? 'warning' : 'info',
+    targetPermission: USER_PERMISSIONS.REPAIRS_VIEW,
+    title: 'Repair status updated',
+  }, user.id);
+  return detail;
 };
 
 export const publicRepairStatus = async (input: unknown) => {

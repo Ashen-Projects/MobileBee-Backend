@@ -57,6 +57,17 @@ export const STOCK_STATUS = {
 } as const;
 
 export const USER_PERMISSIONS = {
+  DASHBOARD_ALL_LOCATIONS_VIEW: 'dashboard.all_locations.view',
+  DASHBOARD_CONTROLS_UPDATE: 'dashboard.controls.update',
+  DASHBOARD_CONTROLS_VIEW: 'dashboard.controls.view',
+  DASHBOARD_COST_VIEW: 'dashboard.cost.view',
+  DASHBOARD_FORECAST_VIEW: 'dashboard.forecast.view',
+  DASHBOARD_INVENTORY_VIEW: 'dashboard.inventory.view',
+  DASHBOARD_INSIGHTS_ACTION: 'dashboard.insights.action',
+  DASHBOARD_PROFIT_VIEW: 'dashboard.profit.view',
+  DASHBOARD_PURCHASING_VIEW: 'dashboard.purchasing.view',
+  DASHBOARD_REPAIRS_VIEW: 'dashboard.repairs.view',
+  DASHBOARD_SALES_VIEW: 'dashboard.sales.view',
   DASHBOARD_VIEW: 'dashboard.view',
   DOCUMENT_SEQUENCES_CREATE: 'document_sequences.create',
   DOCUMENT_SEQUENCES_UPDATE: 'document_sequences.update',

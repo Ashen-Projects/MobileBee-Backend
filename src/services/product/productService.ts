@@ -8,9 +8,11 @@ import {
   productCategories,
   productCategoryRequiredAttributes,
   productImages,
+  productLocationStockLevels,
   productProductAttributeOptions,
   products,
   seo,
+  locations,
 } from '../../db/schema';
 import { AppError } from '../../errors/app-error';
 import type { AuthenticatedUser } from '../auth/authService';
@@ -43,6 +45,15 @@ const findProduct = async (id: number): Promise<ProductRow> => {
   const [row] = await db.select().from(products).where(eq(products.id, id)).limit(1);
   if (!row) throw new AppError('Product not found.', 404);
   return row;
+};
+
+const assertActiveStockLocations = async (levels: Array<{ locationId: number; minimumStockLevel: number }>) => {
+  if (!levels.length) return;
+  const locationRows = await db.select({ id: locations.id, isActive: locations.isActive }).from(locations)
+    .where(inArray(locations.id, levels.map(({ locationId }) => locationId)));
+  if (locationRows.length !== levels.length || locationRows.some(({ isActive }) => !isActive)) {
+    throw new AppError('Every stock alert location must exist and be active.', 400);
+  }
 };
 
 const assertUniqueProduct = async (name: string, sku: string | null, excludedId?: number) => {
@@ -231,12 +242,22 @@ export const getProduct = async (idInput: unknown) => {
   const variations = await db.select().from(products).where(eq(products.parentId, id))
     .orderBy(asc(products.priority), asc(products.name));
   const productIds = [id, ...variations.map(({ id: variationId }) => variationId)];
-  const [category, imageRows, seoRows, optionRows] = await Promise.all([
+  const [category, imageRows, seoRows, optionRows, stockLevelRows] = await Promise.all([
     product.categoryId ? db.select().from(productCategories).where(eq(productCategories.id, product.categoryId)).limit(1) : [],
     db.select().from(productImages).where(inArray(productImages.productId, productIds))
       .orderBy(desc(productImages.isPrimary), asc(productImages.priority), asc(productImages.id)),
     product.seoId ? db.select().from(seo).where(eq(seo.seoId, product.seoId)).limit(1) : [],
     getOptionDetails(productIds),
+    db.select({
+      locationId: locations.id,
+      locationName: locations.name,
+      minimumStockLevel: productLocationStockLevels.minimumStockLevel,
+    }).from(locations)
+      .leftJoin(productLocationStockLevels, and(
+        eq(productLocationStockLevels.locationId, locations.id),
+        eq(productLocationStockLevels.productId, id),
+      ))
+      .where(eq(locations.isActive, true)).orderBy(asc(locations.name)),
   ]);
   const decorate = (row: ProductRow) => ({
     ...row,
@@ -248,12 +269,24 @@ export const getProduct = async (idInput: unknown) => {
     hasVariations: product.hasVariations || variations.length > 0,
     category: category[0] ?? null,
     seo: seoRows[0] ?? null,
+    stockLevels: stockLevelRows.map((row) => ({
+      locationId: row.locationId,
+      locationName: row.locationName,
+      minimumStockLevel: Number(row.minimumStockLevel ?? 0),
+    })),
     variations: variations.map(decorate),
   };
 };
 
+export const listStockLevelLocations = async () => db.select({
+  locationId: locations.id,
+  locationName: locations.name,
+}).from(locations).where(eq(locations.isActive, true)).orderBy(asc(locations.name))
+  .then((rows) => rows.map(({ locationId, locationName }) => ({ locationId, locationName, minimumStockLevel: 0 })));
+
 export const createProduct = async (input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
   const data = createProductSchema.parse(input);
+  await assertActiveStockLocations(data.stockLevels);
   const { categoryId } = await resolveProductStructure(data);
   await assertUniqueProduct(data.name, data.sku ?? null);
   const id = await db.transaction(async (transaction) => {
@@ -294,6 +327,14 @@ export const createProduct = async (input: unknown, user: AuthenticatedUser, con
         ...image, altText: image.altText ?? null, productId, timestamp: Date.now(),
       })));
     }
+    if (!data.hasVariations && data.stockLevels.length) {
+      await transaction.insert(productLocationStockLevels).values(data.stockLevels.map((level) => ({
+        ...level,
+        productId,
+        updatedAt: Date.now(),
+        updatedBy: user.id,
+      })));
+    }
     await transaction.insert(auditLogs).values(audit(user, context, {
       action: 'create', entityId: productId, newValues: { ...data, categoryId, seoId },
     }));
@@ -305,6 +346,7 @@ export const createProduct = async (input: unknown, user: AuthenticatedUser, con
 export const updateProduct = async (idInput: unknown, input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
   const id = entityIdSchema.parse(idInput);
   const data = updateProductSchema.parse(input);
+  if (data.stockLevels) await assertActiveStockLocations(data.stockLevels);
   const current = await findProduct(id);
   const optionIds = data.optionIds ?? (await db.select({ optionId: productProductAttributeOptions.optionId })
     .from(productProductAttributeOptions).where(eq(productProductAttributeOptions.productId, id))).map(({ optionId }) => optionId);
@@ -362,6 +404,20 @@ export const updateProduct = async (idInput: unknown, input: unknown, user: Auth
       if (data.optionIds.length) await transaction.insert(productProductAttributeOptions).values(data.optionIds.map((optionId) => ({
         optionId, productId: id, timestamp: Date.now(),
       })));
+    }
+    if (data.stockLevels) {
+      if (current.hasVariations && !current.parentId) {
+        throw new AppError('Stock alert levels must be configured on sellable variations, not the parent product.', 400);
+      }
+      await transaction.delete(productLocationStockLevels).where(eq(productLocationStockLevels.productId, id));
+      if (data.stockLevels.length) {
+        await transaction.insert(productLocationStockLevels).values(data.stockLevels.map((level) => ({
+          ...level,
+          productId: id,
+          updatedAt: Date.now(),
+          updatedBy: user.id,
+        })));
+      }
     }
     if (data.images) {
       await transaction.delete(productImages).where(eq(productImages.productId, id));
