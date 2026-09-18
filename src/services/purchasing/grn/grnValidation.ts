@@ -36,6 +36,32 @@ const receivedItem = z.object({
 
 export const grnEntityIdSchema = entityId;
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+export const GRN_DOCUMENT_TYPES = {
+  OTHER: 'other',
+  SUPPLIER_DELIVERY_NOTE: 'supplierDeliveryNote',
+  SUPPLIER_INVOICE: 'supplierInvoice',
+} as const;
+
+const grnDocument = z.object({
+  cloudinaryPublicId: z.string().trim().max(512)
+    .regex(/^mobee\/grn-invoices\/[A-Za-z0-9_./-]+$/, 'Invalid supplier invoice file reference.')
+    .optional(),
+  documentType: z.enum([
+    GRN_DOCUMENT_TYPES.OTHER,
+    GRN_DOCUMENT_TYPES.SUPPLIER_DELIVERY_NOTE,
+    GRN_DOCUMENT_TYPES.SUPPLIER_INVOICE,
+  ]),
+  fileName: z.string().trim().min(1).max(255),
+  fileUrl: z.string().trim().url().max(1024),
+}).strict().superRefine((document, context) => {
+  if (document.documentType === GRN_DOCUMENT_TYPES.SUPPLIER_INVOICE && !document.cloudinaryPublicId) {
+    context.addIssue({
+      code: 'custom',
+      message: 'A supplier invoice must be uploaded through the secure invoice uploader.',
+      path: ['cloudinaryPublicId'],
+    });
+  }
+});
 
 export const listGrnsSchema = z.object({
   fromDate: dateString.optional(),
@@ -50,11 +76,7 @@ export const listGrnsSchema = z.object({
 }).strict();
 
 export const createGrnSchema = z.object({
-  documents: z.array(z.object({
-    documentType: z.string().trim().min(1).max(80),
-    fileName: z.string().trim().min(1).max(255),
-    fileUrl: z.string().trim().url().max(1024),
-  }).strict()).max(20).optional().default([]),
+  documents: z.array(grnDocument).max(20).optional().default([]),
   items: z.array(receivedItem).min(1).max(500)
     .refine((items) => new Set(items.map(({ purchaseOrderItemId }) => purchaseOrderItemId)).size === items.length, {
       message: 'A purchase-order item can appear only once.',
@@ -97,11 +119,7 @@ export const financeDecisionSchema = z.object({
 }).strict();
 
 export const addGrnDocumentsSchema = z.object({
-  documents: z.array(z.object({
-    documentType: z.string().trim().min(1).max(80),
-    fileName: z.string().trim().min(1).max(255),
-    fileUrl: z.string().trim().url().max(1024),
-  }).strict()).min(1).max(20),
+  documents: z.array(grnDocument).min(1).max(20),
 }).strict();
 
 export const addGrnNoteSchema = z.object({

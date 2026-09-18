@@ -21,6 +21,17 @@ export const requirePermission = (...requiredPermissions: string[]): RequestHand
     next();
   };
 
+export const requireAnyPermission = (...requiredPermissions: string[]): RequestHandler =>
+  (_req, res, next) => {
+    const user = res.locals.auth as AuthenticatedUser | undefined;
+    if (!user) return next(new AppError('Authentication is required.', 401));
+
+    const isAdministrator = user.roles.some(({ name }) => name === USER_ROLES.ADMIN);
+    if (isAdministrator || requiredPermissions.some((permission) => user.permissions.includes(permission))) return next();
+
+    next(new AppError('You do not have permission to perform this action.', 403));
+  };
+
 export const requireRole = (...requiredRoles: string[]): RequestHandler =>
   (_req, res, next) => {
     const user = res.locals.auth as AuthenticatedUser | undefined;

@@ -153,6 +153,15 @@ export const listSales = async (input: unknown) => {
   const query = listSalesSchema.parse(input);
   const filters: SQL[] = [];
   if (query.status !== 'all') filters.push(eq(sales.status, query.status));
+  if (query.paymentMethod !== 'all') {
+    // Use EXISTS rather than a join: a sale can have more than one payment in the future,
+    // but it must still appear only once in the paginated sales list.
+    filters.push(sql`exists (
+      select 1 from ${salePayments}
+      where ${salePayments.saleId} = ${sales.id}
+        and ${salePayments.method} = ${query.paymentMethod}
+    )`);
+  }
   if (query.fromDate) filters.push(sql`${sales.timestamp} >= ${startOfColomboDate(query.fromDate)}`);
   if (query.toDate) filters.push(sql`${sales.timestamp} <= ${endOfColomboDate(query.toDate)}`);
   if (query.search) {
@@ -196,17 +205,26 @@ export const dailySummary = async (input: unknown) => {
   if (fromMs > toMs) throw new AppError('From date cannot be after to date.', 400);
   if (toMs - fromMs > 370 * 24 * 60 * 60 * 1000) throw new AppError('Date range cannot be longer than 370 days.', 400);
 
+  const summaryFilters: SQL[] = [
+    eq(sales.status, 'completed'),
+    sql`${sales.timestamp} >= ${fromMs}`,
+    sql`${sales.timestamp} <= ${toMs}`,
+  ];
+  if (query.paymentMethod !== 'all') {
+    summaryFilters.push(sql`exists (
+      select 1 from ${salePayments}
+      where ${salePayments.saleId} = ${sales.id}
+        and ${salePayments.method} = ${query.paymentMethod}
+    )`);
+  }
+
   const rows = await db.select({
     discountAmount: sales.discountAmount,
     paidAmount: sales.paidAmount,
     status: sales.status,
     timestamp: sales.timestamp,
     totalAmount: sales.totalAmount,
-  }).from(sales).where(and(
-    eq(sales.status, 'completed'),
-    sql`${sales.timestamp} >= ${fromMs}`,
-    sql`${sales.timestamp} <= ${toMs}`,
-  )).orderBy(sales.timestamp);
+  }).from(sales).where(and(...summaryFilters)).orderBy(sales.timestamp);
 
   const byDate = new Map(eachColomboDate(query.fromDate, query.toDate).map((date) => [date, {
     date,

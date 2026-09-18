@@ -2,20 +2,38 @@ import { randomBytes } from 'crypto';
 import { and, count, desc, eq, like, or, type SQL } from 'drizzle-orm';
 
 import { db } from '../../db';
-import { auditLogs, customers, locations, repairHistory, repairJobs, users } from '../../db/schema';
+import { auditLogs, customers, locations, repairDocuments, repairHistory, repairJobs, users } from '../../db/schema';
 import { AppError } from '../../errors/app-error';
 import type { AuthenticatedUser } from '../auth/authService';
 import { safeCreateNotification } from '../notification/notificationService';
 import { USER_PERMISSIONS } from '../../utils/constants';
+import { repairImageUrl } from '../media/cloudinaryService';
 import { createRepairJobSchema, listRepairJobsSchema, publicRepairStatusSchema, repairJobIdSchema, updateRepairStatusSchema } from './repairValidation';
 
 type AuditContext = { ipAddress?: string };
 type RepairStatus = 'received' | 'inspection' | 'waitingParts' | 'inProgress' | 'completed' | 'delivered' | 'cancelled';
+type RepairImage = { cloudinaryPublicId: string; fileName: string };
 
 const currentYear = () => Number(new Intl.DateTimeFormat('en', { timeZone: 'Asia/Colombo', year: 'numeric' }).format(new Date()));
 const makePublicPath = (jobNo: string, accessToken: string) => `/dashboard/repair-status?jobNo=${encodeURIComponent(jobNo)}&token=${encodeURIComponent(accessToken)}`;
 const makeToken = () => randomBytes(24).toString('base64url');
 const makeJobNo = (locationId: number) => `RJ-${String(locationId).padStart(3, '0')}-${currentYear()}-${randomBytes(3).toString('hex').toUpperCase()}`;
+
+const repairImageDocuments = (
+  images: RepairImage[],
+  documentType: 'intakePhoto' | 'inspectionPhoto',
+  repairJobId: number,
+  uploadedBy: number,
+  timestamp: number,
+) => images.map((image) => ({
+  cloudinaryPublicId: image.cloudinaryPublicId,
+  documentType,
+  fileName: image.fileName,
+  fileUrl: repairImageUrl(image.cloudinaryPublicId),
+  repairJobId,
+  timestamp,
+  uploadedBy,
+}));
 
 const statusLabels: Record<RepairStatus, string> = {
   cancelled: 'Cancelled',
@@ -77,18 +95,29 @@ const repairDetail = async (id: number) => {
     .leftJoin(users, eq(users.id, repairJobs.assignedTo))
     .where(eq(repairJobs.id, id)).limit(1);
   if (!job) throw new AppError('Repair job not found.', 404);
-  const history = await db.select({
-    id: repairHistory.id,
-    newStatus: repairHistory.newStatus,
-    note: repairHistory.note,
-    oldStatus: repairHistory.oldStatus,
-    timestamp: repairHistory.timestamp,
-    userName: users.displayName,
-  }).from(repairHistory)
-    .innerJoin(users, eq(users.id, repairHistory.userId))
-    .where(eq(repairHistory.repairJobId, id))
-    .orderBy(repairHistory.timestamp);
-  return { ...job, history, publicStatusPath: makePublicPath(job.jobNo, job.publicStatusToken) };
+  const [history, documents] = await Promise.all([
+    db.select({
+      id: repairHistory.id,
+      newStatus: repairHistory.newStatus,
+      note: repairHistory.note,
+      oldStatus: repairHistory.oldStatus,
+      timestamp: repairHistory.timestamp,
+      userName: users.displayName,
+    }).from(repairHistory)
+      .innerJoin(users, eq(users.id, repairHistory.userId))
+      .where(eq(repairHistory.repairJobId, id))
+      .orderBy(repairHistory.timestamp),
+    db.select({
+      documentType: repairDocuments.documentType,
+      fileName: repairDocuments.fileName,
+      fileUrl: repairDocuments.fileUrl,
+      id: repairDocuments.id,
+      timestamp: repairDocuments.timestamp,
+    }).from(repairDocuments)
+      .where(eq(repairDocuments.repairJobId, id))
+      .orderBy(desc(repairDocuments.id)),
+  ]);
+  return { ...job, documents, history, publicStatusPath: makePublicPath(job.jobNo, job.publicStatusToken) };
 };
 
 export const listRepairJobs = async (input: unknown) => {
@@ -172,13 +201,16 @@ export const createRepairJob = async (input: unknown, user: AuthenticatedUser, c
     });
     const repairJobId = Number(result[0].insertId);
     await transaction.insert(repairHistory).values({ newStatus: 'received', note: 'Repair job received.', repairJobId, timestamp, userId: user.id });
+    if (data.intakePhotos.length) {
+      await transaction.insert(repairDocuments).values(repairImageDocuments(data.intakePhotos, 'intakePhoto', repairJobId, user.id, timestamp));
+    }
     await transaction.insert(auditLogs).values({
       action: 'create',
       entityId: repairJobId,
       entityType: 'repair_job',
       ipAddress: context.ipAddress,
       module: 'repairs',
-      newValues: { deviceName: data.deviceName, jobNo },
+      newValues: { deviceName: data.deviceName, intakePhotoCount: data.intakePhotos.length, jobNo },
       timestamp,
       userId: user.id,
     });
@@ -208,13 +240,16 @@ export const updateRepairStatus = async (idInput: unknown, input: unknown, user:
     const timestamp = Date.now();
     await transaction.update(repairJobs).set({ status: data.status }).where(eq(repairJobs.id, id));
     await transaction.insert(repairHistory).values({ newStatus: data.status, note: data.note || null, oldStatus: job.status, repairJobId: id, timestamp, userId: user.id });
+    if (data.status === 'inspection') {
+      await transaction.insert(repairDocuments).values(repairImageDocuments(data.inspectionPhotos, 'inspectionPhoto', id, user.id, timestamp));
+    }
     await transaction.insert(auditLogs).values({
       action: 'update',
       entityId: id,
       entityType: 'repair_job',
       ipAddress: context.ipAddress,
       module: 'repairs',
-      newValues: { status: data.status },
+      newValues: { inspectionPhotoCount: data.inspectionPhotos.length, status: data.status },
       oldValues: { status: job.status },
       timestamp,
       userId: user.id,
@@ -239,6 +274,7 @@ export const publicRepairStatus = async (input: unknown) => {
   const [job] = await db.select({
     deviceName: repairJobs.deviceName,
     estimatedCost: repairJobs.estimatedCost,
+    id: repairJobs.id,
     jobNo: repairJobs.jobNo,
     locationName: locations.name,
     serialImei: repairJobs.serialImei,
@@ -249,16 +285,25 @@ export const publicRepairStatus = async (input: unknown) => {
     .where(and(eq(repairJobs.jobNo, query.jobNo), eq(repairJobs.publicStatusToken, query.token)))
     .limit(1);
   if (!job) throw new AppError('Repair job was not found or the access code is invalid.', 404);
-  const history = await db.select({
-    newStatus: repairHistory.newStatus,
-    timestamp: repairHistory.timestamp,
-  }).from(repairHistory)
-    .innerJoin(repairJobs, eq(repairJobs.id, repairHistory.repairJobId))
-    .where(and(eq(repairJobs.jobNo, query.jobNo), eq(repairJobs.publicStatusToken, query.token)))
-    .orderBy(repairHistory.timestamp);
+  const { id: repairJobId, ...publicJob } = job;
+  const [history, inspectionPhotos] = await Promise.all([
+    db.select({
+      newStatus: repairHistory.newStatus,
+      timestamp: repairHistory.timestamp,
+    }).from(repairHistory)
+      .where(eq(repairHistory.repairJobId, repairJobId))
+      .orderBy(repairHistory.timestamp),
+    db.select({
+      fileUrl: repairDocuments.fileUrl,
+      timestamp: repairDocuments.timestamp,
+    }).from(repairDocuments)
+      .where(and(eq(repairDocuments.repairJobId, repairJobId), eq(repairDocuments.documentType, 'inspectionPhoto')))
+      .orderBy(repairDocuments.timestamp),
+  ]);
   return {
-    ...job,
-    statusLabel: statusLabels[job.status],
-    timeline: buildTimeline(job.status, history),
+    ...publicJob,
+    inspectionPhotos,
+    statusLabel: statusLabels[publicJob.status],
+    timeline: buildTimeline(publicJob.status, history),
   };
 };

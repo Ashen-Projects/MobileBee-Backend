@@ -11,11 +11,16 @@ export const grnDocuments = mysqlTable(
       .references(() => grns.id),
     fileName: varchar('file_name', { length: 255 }).notNull(),
     fileUrl: varchar('file_url', { length: 1024 }).notNull(),
+    cloudinaryPublicId: varchar('cloudinary_public_id', { length: 512 }),
     documentType: varchar('document_type', { length: 80 }).notNull(),
     uploadedBy: int('uploaded_by')
       .notNull()
       .references(() => users.id),
     timestamp: bigint('timestamp', { mode: 'number', unsigned: true }).notNull(),
   },
-  (table) => [index('grn_documents_grn_id_idx').on(table.grnId), index('grn_documents_document_type_idx').on(table.documentType)],
+  (table) => [
+    index('grn_documents_grn_id_idx').on(table.grnId),
+    index('grn_documents_document_type_idx').on(table.documentType),
+    index('grn_documents_cloudinary_public_id_idx').on(table.cloudinaryPublicId),
+  ],
 );
