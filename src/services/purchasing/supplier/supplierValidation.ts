@@ -7,6 +7,7 @@ const money = z.coerce.number().finite().min(0).max(9_999_999_999.99)
 const supplierCode = z.string().trim().min(1).max(50).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/)
   .transform((value) => value.toUpperCase());
 const reservedSupplierCode = z.string().trim().regex(/^SUP-\d{6,}$/, 'A valid reserved supplier code is required.');
+const paymentMethod = z.enum(['cash', 'bankTransfer', 'cheque', 'card']);
 
 export const entityIdSchema = z.coerce.number().int().positive();
 
@@ -25,6 +26,7 @@ const supplierFields = {
   email: z.union([z.email().max(255), z.literal('')]).nullable().optional()
     .transform((value) => value === '' ? null : value?.toLowerCase()),
   name: z.string().trim().min(1).max(255),
+  preferredPaymentMethod: paymentMethod.default('bankTransfer'),
   paymentTermDays: z.coerce.number().int().min(0).max(3_650).default(0),
   phone: z.string().trim().max(30).regex(/^[0-9+()\-\s]*$/).nullable().optional()
     .transform((value) => value === '' ? null : value),
@@ -43,6 +45,7 @@ export const updateSupplierSchema = z.object({
   creditLimit: money.optional(),
   email: supplierFields.email,
   name: supplierFields.name.optional(),
+  preferredPaymentMethod: paymentMethod.optional(),
   paymentTermDays: z.coerce.number().int().min(0).max(3_650).optional(),
   phone: supplierFields.phone,
 }).strict().refine((data) => Object.keys(data).length > 0, 'At least one field is required.');

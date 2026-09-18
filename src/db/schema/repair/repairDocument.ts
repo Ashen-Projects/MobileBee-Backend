@@ -11,6 +11,7 @@ export const repairDocuments = mysqlTable(
       .references(() => repairJobs.id),
     documentType: mysqlEnum('document_type', [
       'intakePhoto',
+      'inspectionPhoto',
       'estimate',
       'approval',
       'repairPhoto',
@@ -19,6 +20,7 @@ export const repairDocuments = mysqlTable(
     ]).notNull(),
     fileName: varchar('file_name', { length: 255 }).notNull(),
     fileUrl: varchar('file_url', { length: 1024 }).notNull(),
+    cloudinaryPublicId: varchar('cloudinary_public_id', { length: 512 }),
     uploadedBy: int('uploaded_by')
       .notNull()
       .references(() => users.id),
@@ -27,5 +29,6 @@ export const repairDocuments = mysqlTable(
   (table) => [
     index('repair_documents_repair_job_id_idx').on(table.repairJobId),
     index('repair_documents_document_type_idx').on(table.documentType),
+    index('repair_documents_cloudinary_public_id_idx').on(table.cloudinaryPublicId),
   ],
 );

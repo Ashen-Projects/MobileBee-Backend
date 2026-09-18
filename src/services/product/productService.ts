@@ -15,7 +15,9 @@ import {
   locations,
 } from '../../db/schema';
 import { AppError } from '../../errors/app-error';
+import { logger } from '../../logger/logger';
 import type { AuthenticatedUser } from '../auth/authService';
+import { deleteProductImage } from '../media/cloudinaryService';
 import {
   createProductSchema,
   entityIdSchema,
@@ -324,7 +326,7 @@ export const createProduct = async (input: unknown, user: AuthenticatedUser, con
     }
     if (data.images.length) {
       await transaction.insert(productImages).values(data.images.map((image) => ({
-        ...image, altText: image.altText ?? null, productId, timestamp: Date.now(),
+        ...image, altText: image.altText ?? null, cloudinaryPublicId: image.cloudinaryPublicId ?? null, productId, timestamp: Date.now(),
       })));
     }
     if (!data.hasVariations && data.stockLevels.length) {
@@ -366,6 +368,7 @@ export const updateProduct = async (idInput: unknown, input: unknown, user: Auth
     throw new AppError('Lowest selling price cannot exceed MRP.', 400);
   }
 
+  const obsoleteCloudinaryAssets: string[] = [];
   await db.transaction(async (transaction) => {
     let seoId = current.seoId;
     if (data.seo === null && seoId) {
@@ -420,15 +423,30 @@ export const updateProduct = async (idInput: unknown, input: unknown, user: Auth
       }
     }
     if (data.images) {
+      const previousImages = await transaction.select({ cloudinaryPublicId: productImages.cloudinaryPublicId })
+        .from(productImages).where(eq(productImages.productId, id));
+      const retainedPublicIds = new Set(data.images.map(({ cloudinaryPublicId }) => cloudinaryPublicId).filter((value): value is string => Boolean(value)));
+      obsoleteCloudinaryAssets.push(...previousImages
+        .map(({ cloudinaryPublicId }) => cloudinaryPublicId)
+        .filter((publicId): publicId is string => typeof publicId === 'string' && !retainedPublicIds.has(publicId)));
       await transaction.delete(productImages).where(eq(productImages.productId, id));
       if (data.images.length) await transaction.insert(productImages).values(data.images.map((image) => ({
-        ...image, altText: image.altText ?? null, productId: id, timestamp: Date.now(),
+        ...image, altText: image.altText ?? null, cloudinaryPublicId: image.cloudinaryPublicId ?? null, productId: id, timestamp: Date.now(),
       })));
     }
     await transaction.insert(auditLogs).values(audit(user, context, {
       action: 'update', entityId: id, newValues: { ...data, categoryId, seoId }, oldValues: current,
     }));
   });
+  await Promise.all(obsoleteCloudinaryAssets.map(async (publicId) => {
+    try {
+      await deleteProductImage(publicId);
+    } catch (error) {
+      logger.warn('Product image was removed from the database but could not be removed from Cloudinary.', {
+        error: error instanceof Error ? error.message : String(error), productId: id,
+      });
+    }
+  }));
   return getProduct(id);
 };
 

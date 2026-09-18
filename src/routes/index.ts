@@ -18,6 +18,7 @@ import { publicRepairStatusRoutes, repairRoutes } from './repair/repairRoutes';
 import { reportRoutes } from './reports/reportRoutes';
 import { notificationRoutes } from './notification/notificationRoutes';
 import { dashboardRoutes } from './dashboard/dashboardRoutes';
+import { mediaRoutes } from './media/mediaRoutes';
 import { requireAuth } from '../middlewares/authMiddleware';
 
 export const apiRoutes = Router();
@@ -32,6 +33,7 @@ apiRoutes.use('/users', userRoutes);
 apiRoutes.use('/roles', roleRoutes);
 apiRoutes.use('/customers', customerRoutes);
 apiRoutes.use('/products', productRoutes);
+apiRoutes.use('/media', mediaRoutes);
 apiRoutes.use('/suppliers', supplierRoutes);
 apiRoutes.use('/purchase-orders', purchaseOrderRoutes);
 apiRoutes.use('/grns', grnRoutes);

@@ -1,4 +1,4 @@
-import { boolean, decimal, index, int, mysqlTable, text, uniqueIndex, varchar } from 'drizzle-orm/mysql-core';
+import { boolean, decimal, index, int, mysqlEnum, mysqlTable, text, uniqueIndex, varchar } from 'drizzle-orm/mysql-core';
 export const suppliers = mysqlTable(
   'suppliers',
   {
@@ -11,12 +11,14 @@ export const suppliers = mysqlTable(
     address: text('address'),
     creditLimit: decimal('credit_limit', { precision: 12, scale: 2 }).default('0.00'),
     paymentTermDays: int('payment_term_days').default(0),
+    preferredPaymentMethod: mysqlEnum('preferred_payment_method', ['cash', 'bankTransfer', 'cheque', 'card']).notNull().default('bankTransfer'),
     isActive: boolean('is_active').notNull().default(true),
   },
   (table) => [
     uniqueIndex('suppliers_name_uq').on(table.name),
     uniqueIndex('suppliers_code_uq').on(table.code),
     index('suppliers_phone_idx').on(table.phone),
+    index('suppliers_preferred_payment_method_idx').on(table.preferredPaymentMethod),
     index('suppliers_is_active_idx').on(table.isActive),
   ],
 );

@@ -9,6 +9,7 @@ export const productImages = mysqlTable(
       .notNull()
       .references(() => products.id),
     url: varchar('url', { length: 1024 }).notNull(),
+    cloudinaryPublicId: varchar('cloudinary_public_id', { length: 512 }),
     altText: varchar('alt_text', { length: 255 }),
     priority: int('priority').notNull().default(0),
     isPrimary: boolean('is_primary').notNull().default(false),

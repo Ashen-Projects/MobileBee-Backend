@@ -31,12 +31,14 @@ import {
   USER_ROLES,
 } from '../../../utils/constants';
 import type { AuthenticatedUser } from '../../auth/authService';
+import { grnInvoiceFileUrl } from '../../media/cloudinaryService';
 import {
   addGrnDocumentsSchema,
   addGrnNoteSchema,
   createGrnSchema,
   addGrnStockSchema,
   financeDecisionSchema,
+  GRN_DOCUMENT_TYPES,
   grnEntityIdSchema,
   listGrnsSchema,
   verifyGrnCountSchema,
@@ -62,6 +64,12 @@ const audit = (user: AuthenticatedUser, context: AuditContext, values: {
   module: 'grns',
   timestamp: Date.now(),
   userId: user.id,
+});
+
+const documentForStorage = <T extends { cloudinaryPublicId?: string; fileUrl: string }>(document: T) => ({
+  ...document,
+  cloudinaryPublicId: document.cloudinaryPublicId ?? null,
+  fileUrl: document.cloudinaryPublicId ? grnInvoiceFileUrl(document.cloudinaryPublicId) : document.fileUrl,
 });
 
 const money = (value: number) => (Math.round(value * 100) / 100).toFixed(2);
@@ -351,7 +359,7 @@ export const createGrn = async (input: unknown, user: AuthenticatedUser, context
     }
     if (data.documents.length) {
       await transaction.insert(grnDocuments).values(data.documents.map((document) => ({
-        ...document,
+        ...documentForStorage(document),
         grnId: id,
         timestamp,
         uploadedBy: user.id,
@@ -478,6 +486,17 @@ export const decideGrnFinance = async (idInput: unknown, input: unknown, user: A
     }
     const timestamp = Date.now();
     if (data.status === 'approved') {
+      const [supplierInvoice] = await transaction.select({ cloudinaryPublicId: grnDocuments.cloudinaryPublicId })
+        .from(grnDocuments)
+        .where(and(
+          eq(grnDocuments.grnId, id),
+          eq(grnDocuments.documentType, GRN_DOCUMENT_TYPES.SUPPLIER_INVOICE),
+        ))
+        .limit(1)
+        .for('update');
+      if (!supplierInvoice?.cloudinaryPublicId) {
+        throw new AppError('Attach the supplier invoice before final finance approval.', 409);
+      }
       const [order] = await transaction.select().from(purchaseOrders)
         .where(eq(purchaseOrders.id, current.purchaseOrderId)).limit(1).for('update');
       if (!order) throw new AppError('Related purchase order not found.', 500);
@@ -709,7 +728,7 @@ export const addGrnDocuments = async (idInput: unknown, input: unknown, user: Au
     if (!current) throw new AppError('GRN not found.', 404);
     const timestamp = Date.now();
     await transaction.insert(grnDocuments).values(data.documents.map((document) => ({
-      ...document, grnId: id, timestamp, uploadedBy: user.id,
+      ...documentForStorage(document), grnId: id, timestamp, uploadedBy: user.id,
     })));
     await transaction.insert(grnHistory).values({
       action: 'documents_added', grnId: id, newStatus: current.status,

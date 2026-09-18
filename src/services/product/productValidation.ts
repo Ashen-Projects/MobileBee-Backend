@@ -42,6 +42,7 @@ const seoSchema = z.object({
 
 const imageSchema = z.object({
   altText: nullableText(255),
+  cloudinaryPublicId: z.string().trim().max(512).regex(/^mobee\/products\/[A-Za-z0-9_/-]+$/).nullable().optional(),
   isPrimary: z.boolean().default(false),
   priority: z.coerce.number().int().min(0).max(100_000).default(0),
   url: z.url().max(1024),

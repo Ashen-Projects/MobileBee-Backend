@@ -7,6 +7,7 @@ export const listSalesSchema = z.object({
   fromDate: dateString.optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(10),
+  paymentMethod: z.enum(['all', 'cash', 'card', 'bankTransfer', 'finance', 'mobile']).default('all'),
   search: z.string().trim().optional().default(''),
   status: z.enum(['all', 'draft', 'completed', 'cancelled', 'returned']).default('all'),
   toDate: dateString.optional(),
@@ -14,6 +15,7 @@ export const listSalesSchema = z.object({
 
 export const dailySalesSummarySchema = z.object({
   fromDate: dateString,
+  paymentMethod: z.enum(['all', 'cash', 'card', 'bankTransfer', 'finance', 'mobile']).default('all'),
   toDate: dateString,
 }).strict();
 

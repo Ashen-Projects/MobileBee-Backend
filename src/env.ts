@@ -9,6 +9,11 @@ const corsOriginSchema = z
     message: 'CORS_ORIGIN must be "*" or a valid URL.',
   });
 
+const optionalEnvironmentValue = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.string().trim().min(1).optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']),
   PORT: z.coerce.number().int().positive().max(65535),
@@ -31,6 +36,9 @@ const envSchema = z.object({
   BOOTSTRAP_ADMIN_PASSWORD: z.string().min(12),
   AUTH_LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(300000),
   AUTH_LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+  CLOUDINARY_CLOUD_NAME: optionalEnvironmentValue,
+  CLOUDINARY_API_KEY: optionalEnvironmentValue,
+  CLOUDINARY_API_SECRET: optionalEnvironmentValue,
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
@@ -44,6 +52,24 @@ if (!parsedEnv.success) {
 }
 
 export const env = parsedEnv.data;
+
+const cloudinaryCredentials = [
+  env.CLOUDINARY_CLOUD_NAME,
+  env.CLOUDINARY_API_KEY,
+  env.CLOUDINARY_API_SECRET,
+];
+
+if (cloudinaryCredentials.some(Boolean) && !cloudinaryCredentials.every(Boolean)) {
+  throw new Error('Cloudinary configuration is incomplete. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET together.');
+}
+
+export const cloudinaryEnv = cloudinaryCredentials.every(Boolean)
+  ? {
+      apiKey: env.CLOUDINARY_API_KEY as string,
+      apiSecret: env.CLOUDINARY_API_SECRET as string,
+      cloudName: env.CLOUDINARY_CLOUD_NAME as string,
+    }
+  : null;
 
 const databaseHost = env.DB_HOST ?? 'localhost';
 const databaseUser = env.DB_USER ?? env.MYSQL_USER;
