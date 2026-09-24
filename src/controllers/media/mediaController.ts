@@ -8,6 +8,8 @@ import { AppError } from '../../errors/app-error';
 import {
   deleteFileFromFolder,
   deleteImageFromFolder,
+  getFileContent,
+  invoiceResourceTypeFromUrl,
   uploadFileToFolder,
   uploadImageToFolder,
   uploadProductImage,
@@ -120,6 +122,32 @@ export const uploadFile = async (req: Request, res: Response): Promise<void> => 
   if (!req.file) throw new AppError('Select one invoice file to upload.', 400);
   const data = await uploadFileToFolder(req.file, fileFolderFromRequest(req));
   res.status(201).json({ success: true, data });
+};
+
+const filenameForHeader = (value: unknown) => String(value ?? 'supplier-invoice')
+  .replace(/[\\/\r\n"]/g, '_')
+  .slice(0, 180) || 'supplier-invoice';
+
+/** Streams an approved invoice file for an authenticated preview or download. */
+export const getFile = async (req: Request, res: Response): Promise<void> => {
+  const publicId = typeof req.query.publicId === 'string' ? req.query.publicId.trim() : '';
+  if (!publicId) throw new AppError('An invoice file public ID is required.', 400);
+  const [document] = await db.select({ fileUrl: grnDocuments.fileUrl })
+    .from(grnDocuments)
+    .where(eq(grnDocuments.cloudinaryPublicId, publicId))
+    .limit(1);
+  if (!document) throw new AppError('The supplier invoice was not found.', 404);
+  const { body, contentType } = await getFileContent(
+    publicId,
+    fileFolderFromRequest(req),
+    invoiceResourceTypeFromUrl(document.fileUrl),
+  );
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('Content-Disposition', `inline; filename="${filenameForHeader(req.query.fileName)}"`);
+  res.setHeader('Content-Length', String(body.length));
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.status(200).send(body);
 };
 
 export const deleteFile = async (req: Request, res: Response): Promise<void> => {

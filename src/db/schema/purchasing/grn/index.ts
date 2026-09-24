@@ -5,3 +5,6 @@ export * from './grnCountSession';
 export * from './grnDocuments';
 export * from './grnHistory';
 export * from './grnItem';
+export * from './grnStockReceipt';
+export * from './grnStockReceiptItem';
+export * from './grnStockReceiptUnit';

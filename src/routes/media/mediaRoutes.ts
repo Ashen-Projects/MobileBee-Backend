@@ -3,7 +3,7 @@ import multer from 'multer';
 
 import * as controller from '../../controllers/media/mediaController';
 import { AppError } from '../../errors/app-error';
-import { requireAnyPermission } from '../../middlewares/permissionMiddleware';
+import { requireAnyPermission, requirePermission } from '../../middlewares/permissionMiddleware';
 import { isCloudinaryFileFolder, isCloudinaryImageFolder, type CloudinaryFileFolder, type CloudinaryImageFolder } from '../../services/media/mediaFolders';
 import { asyncHandler } from '../../utils/async-handler';
 import { USER_PERMISSIONS } from '../../utils/constants';
@@ -85,5 +85,6 @@ mediaRoutes.post('/repair-images', requireAnyPermission(USER_PERMISSIONS.REPAIRS
 mediaRoutes.delete('/repair-images', requireAnyPermission(USER_PERMISSIONS.REPAIRS_CREATE, USER_PERMISSIONS.REPAIRS_UPDATE), asyncHandler(controller.deleteRepairImageFile));
 mediaRoutes.post('/images/:folderKey', requireImageFolderPermission, uploadSingleImage, asyncHandler(controller.uploadImageFile));
 mediaRoutes.delete('/images/:folderKey', requireImageFolderPermission, asyncHandler(controller.deleteImageFile));
+mediaRoutes.get('/files/:folderKey/content', requirePermission(USER_PERMISSIONS.GRNS_VIEW), asyncHandler(controller.getFile));
 mediaRoutes.post('/files/:folderKey', requireFileFolderPermission, uploadSingleInvoice, asyncHandler(controller.uploadFile));
 mediaRoutes.delete('/files/:folderKey', requireFileFolderPermission, asyncHandler(controller.deleteFile));

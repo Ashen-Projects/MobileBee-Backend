@@ -9,6 +9,9 @@ import {
   grnDocuments,
   grnHistory,
   grnItems,
+  grnStockReceiptItems,
+  grnStockReceipts,
+  grnStockReceiptUnits,
   grns,
   locations,
   products,
@@ -31,7 +34,6 @@ import {
   USER_ROLES,
 } from '../../../utils/constants';
 import type { AuthenticatedUser } from '../../auth/authService';
-import { grnInvoiceFileUrl } from '../../media/cloudinaryService';
 import {
   addGrnDocumentsSchema,
   addGrnNoteSchema,
@@ -69,7 +71,9 @@ const audit = (user: AuthenticatedUser, context: AuditContext, values: {
 const documentForStorage = <T extends { cloudinaryPublicId?: string; fileUrl: string }>(document: T) => ({
   ...document,
   cloudinaryPublicId: document.cloudinaryPublicId ?? null,
-  fileUrl: document.cloudinaryPublicId ? grnInvoiceFileUrl(document.cloudinaryPublicId) : document.fileUrl,
+  // Keep Cloudinary's returned delivery URL. It identifies the asset type for
+  // later previewing while preserving older raw invoice attachments.
+  fileUrl: document.fileUrl,
 });
 
 const money = (value: number) => (Math.round(value * 100) / 100).toFixed(2);
@@ -176,7 +180,7 @@ export const getGrn = async (idInput: unknown) => {
     .where(eq(grns.id, id)).limit(1);
   if (!header) throw new AppError('GRN not found.', 404);
 
-  const [itemRows, stockRows, identifierRows, documents, history, counts] = await Promise.all([
+  const [itemRows, stockRows, identifierRows, documents, history, counts, stockReceiptRows] = await Promise.all([
     db.select({
       id: grnItems.id,
       lowestSellingPrice: products.lowestSellingPrice,
@@ -211,8 +215,19 @@ export const getGrn = async (idInput: unknown) => {
     db.select().from(grnDocuments).where(eq(grnDocuments.grnId, id)).orderBy(desc(grnDocuments.id)),
     db.select().from(grnHistory).where(eq(grnHistory.grnId, id)).orderBy(desc(grnHistory.id)),
     db.select().from(grnCountSessions).where(eq(grnCountSessions.grnId, id)).orderBy(asc(grnCountSessions.id)),
+    db.select().from(grnStockReceipts).where(eq(grnStockReceipts.grnId, id)).orderBy(desc(grnStockReceipts.id)),
   ]);
-  const relevantUserIds = [header.addedBy, header.countedBy, header.counted2By, header.financeApprovedBy]
+  const stockReceiptItems = stockReceiptRows.length
+    ? await db.select().from(grnStockReceiptItems)
+      .where(inArray(grnStockReceiptItems.stockReceiptId, stockReceiptRows.map((receipt) => receipt.id)))
+      .orderBy(asc(grnStockReceiptItems.id))
+    : [];
+  const stockReceiptUnits = stockReceiptItems.length
+    ? await db.select().from(grnStockReceiptUnits)
+      .where(inArray(grnStockReceiptUnits.stockReceiptItemId, stockReceiptItems.map((item) => item.id)))
+      .orderBy(asc(grnStockReceiptUnits.id))
+    : [];
+  const relevantUserIds = [header.addedBy, header.countedBy, header.counted2By, header.financeApprovedBy, ...stockReceiptRows.map((receipt) => receipt.createdBy)]
     .filter((value): value is number => value !== null);
   const userRows = relevantUserIds.length
     ? await db.select({ id: users.id, name: users.displayName }).from(users).where(inArray(users.id, relevantUserIds))
@@ -237,6 +252,18 @@ export const getGrn = async (idInput: unknown) => {
     }
     return map;
   }, new Map<number, number>());
+  const receiptUnitsByItem = stockReceiptUnits.reduce((map, unit) => {
+    const values = map.get(unit.stockReceiptItemId) ?? [];
+    values.push(unit);
+    map.set(unit.stockReceiptItemId, values);
+    return map;
+  }, new Map<number, typeof stockReceiptUnits>());
+  const receiptItemsByReceipt = stockReceiptItems.reduce((map, item) => {
+    const values = map.get(item.stockReceiptId) ?? [];
+    values.push({ ...item, units: receiptUnitsByItem.get(item.id) ?? [] });
+    map.set(item.stockReceiptId, values);
+    return map;
+  }, new Map<number, Array<(typeof stockReceiptItems)[number] & { units: typeof stockReceiptUnits }>>());
   return {
     ...header,
     addedByName: userNames.get(header.addedBy),
@@ -246,6 +273,11 @@ export const getGrn = async (idInput: unknown) => {
     counts,
     documents,
     history,
+    stockReceivingNotes: stockReceiptRows.map((receipt) => ({
+      ...receipt,
+      createdByName: userNames.get(receipt.createdBy) ?? null,
+      items: receiptItemsByReceipt.get(receipt.id) ?? [],
+    })),
     items: itemRows.map((item) => ({
       ...item,
       // Only sellable units are truly stocked. Pending placeholder rows from
@@ -609,6 +641,7 @@ export const addGrnStock = async (idInput: unknown, input: unknown, user: Authen
       lowestSellingPrice: products.lowestSellingPrice,
       mrpPrice: products.mrpPrice,
       name: products.name,
+      sku: products.sku,
     }).from(products).where(inArray(products.id, stockedProductIds)).for('update');
     const productById = new Map(productRows.map((product) => [product.id, product]));
     for (const productId of stockedProductIds) {
@@ -652,10 +685,61 @@ export const addGrnStock = async (idInput: unknown, input: unknown, user: Authen
       await transaction.update(documentSequences).set({ lastNumber: generatedStart + generatedCount - 1 })
         .where(eq(documentSequences.id, sequence.id));
     }
-    let generatedOffset = 0;
     const timestamp = Date.now();
+    const [[supplier], [location]] = await Promise.all([
+      transaction.select({ code: suppliers.code, name: suppliers.name }).from(suppliers)
+        .where(eq(suppliers.id, current.supplierId)).limit(1).for('update'),
+      transaction.select({ name: locations.name }).from(locations)
+        .where(eq(locations.id, current.locationId)).limit(1).for('update'),
+    ]);
+    if (!supplier || !location) throw new AppError('The GRN supplier or location could not be found.', 500);
+
+    await transaction.insert(documentSequences).values({
+      documentType: DOCUMENT_TYPES.STOCK_RECEIVING_NOTE,
+      lastNumber: 0,
+      locationId: current.locationId,
+      prefix: 'SRN',
+      year,
+    }).onDuplicateKeyUpdate({ set: { prefix: 'SRN' } });
+    const [stockReceiptSequence] = await transaction.select().from(documentSequences).where(and(
+      eq(documentSequences.documentType, DOCUMENT_TYPES.STOCK_RECEIVING_NOTE),
+      eq(documentSequences.locationId, current.locationId),
+      eq(documentSequences.year, year),
+    )).limit(1).for('update');
+    if (!stockReceiptSequence) throw new AppError('Stock receiving note sequence could not be initialized.', 500);
+    const stockReceiptSequenceNumber = Number(stockReceiptSequence.lastNumber) + 1;
+    const stockReceiptNumber = `${stockReceiptSequence.prefix}-${String(current.locationId).padStart(3, '0')}-${year}-${String(stockReceiptSequenceNumber).padStart(6, '0')}`;
+    await transaction.update(documentSequences).set({ lastNumber: stockReceiptSequenceNumber })
+      .where(eq(documentSequences.id, stockReceiptSequence.id));
+    const stockReceiptInsert = await transaction.insert(grnStockReceipts).values({
+      createdBy: user.id,
+      grnId: id,
+      locationId: current.locationId,
+      locationName: location.name,
+      noteNumber: stockReceiptNumber,
+      supplierCode: supplier.code,
+      supplierId: current.supplierId,
+      supplierName: supplier.name,
+      timestamp,
+    });
+    const stockReceiptId = Number(stockReceiptInsert[0].insertId);
+
+    let generatedOffset = 0;
     for (const item of data.items) {
       const received = receivedById.get(item.grnItemId)!;
+      const product = productById.get(received.productId)!;
+      const priceUpdate = priceUpdatesByProduct.get(received.productId);
+      const stockReceiptItemInsert = await transaction.insert(grnStockReceiptItems).values({
+        grnItemId: received.id,
+        mrpPrice: priceUpdate?.mrpPrice ?? product.mrpPrice,
+        productId: received.productId,
+        productName: product.name,
+        productSku: product.sku,
+        quantity: item.units.length,
+        stockReceiptId,
+        unitCost: received.unitCost,
+      });
+      const stockReceiptItemId = Number(stockReceiptItemInsert[0].insertId);
       for (const unit of item.units) {
         const barcode = unit.generateBarcode ? `MB-${String(generatedStart + generatedOffset++).padStart(5, '0')}` : unit.barcode;
         const placeholderIds = placeholderByProduct.get(received.productId) ?? [];
@@ -693,6 +777,11 @@ export const addGrnStock = async (idInput: unknown, input: unknown, user: Authen
             value: identifier.value,
           })));
         }
+        await transaction.insert(grnStockReceiptUnits).values({
+          barcode: barcode ?? null,
+          stockId,
+          stockReceiptItemId,
+        });
         await transaction.insert(stockLogs).values({
           action: 'grn_stock_added', newLocationId: current.locationId, newStatus: availableStatus.id,
           referenceId: id, referenceType: 'grn', stockId, timestamp, userId: user.id,
@@ -705,13 +794,14 @@ export const addGrnStock = async (idInput: unknown, input: unknown, user: Authen
     }
     await transaction.insert(grnHistory).values({
       action: 'stock_added', grnId: id, newStatus: current.status,
-      note: `${data.items.reduce((sum, item) => sum + item.units.length, 0)} unit(s) added to stock.`,
+      note: `${data.items.reduce((sum, item) => sum + item.units.length, 0)} unit(s) added to stock. Stock receiving note ${stockReceiptNumber} created.`,
       previousStatus: current.status, timestamp, userId: user.id,
     });
     await transaction.insert(auditLogs).values(audit(user, context, {
       action: 'stock_added', entityId: id,
       newValues: {
         priceUpdates: data.priceUpdates,
+        stockReceivingNoteNumber: stockReceiptNumber,
         units: data.items.reduce((sum, item) => sum + item.units.length, 0),
       },
     }));
