@@ -110,7 +110,10 @@ const uploadInvoiceBuffer = (buffer: Buffer, folder: string) => new Promise<Uplo
   const stream = cloudinary.uploader.upload_stream({
     folder,
     overwrite: false,
-    resource_type: 'raw',
+    // PDF is a Cloudinary image/document asset. Storing it this way gives the
+    // Media Library a real PDF format and a preview instead of a raw download.
+    // JPEG/PNG/WebP invoices use the same supported asset type.
+    resource_type: 'image',
     unique_filename: true,
     use_filename: false,
   }, (error, result) => {
@@ -147,6 +150,48 @@ export const uploadRepairImage = async (file: Express.Multer.File) => {
 
 export const uploadGrnInvoiceFile = async (file: Express.Multer.File) => uploadFileToFolder(file, 'grnInvoices');
 
+export type CloudinaryFileContent = {
+  body: Buffer;
+  contentType: string;
+};
+
+/**
+ * Fetches an approved Cloudinary raw asset on the server. This lets the UI
+ * render a PDF inline after permission checks instead of relying on a browser
+ * to decide whether Cloudinary should download it.
+ */
+export type CloudinaryInvoiceResourceType = 'image' | 'raw';
+
+export const invoiceResourceTypeFromUrl = (fileUrl: string): CloudinaryInvoiceResourceType =>
+  fileUrl.includes('/image/upload/') ? 'image' : 'raw';
+
+export const getFileContent = async (
+  publicId: string,
+  mediaFolder: CloudinaryFileFolder,
+  resourceType: CloudinaryInvoiceResourceType,
+): Promise<CloudinaryFileContent> => {
+  assertConfigured();
+  if (!isManagedAsset(publicId, mediaFolder)) {
+    throw new AppError('The requested invoice file is invalid.', 400);
+  }
+
+  try {
+    const response = await fetch(cloudinary.url(publicId, { resource_type: resourceType, secure: true }));
+    if (!response.ok) throw new Error(`Cloudinary returned ${response.status}.`);
+    const contentType = response.headers.get('content-type')?.split(';')[0]?.toLowerCase() ?? '';
+    if (!acceptedInvoiceMimeTypes.has(contentType)) {
+      throw new Error('Cloudinary returned an unsupported file type.');
+    }
+    const body = Buffer.from(await response.arrayBuffer());
+    if (!body.length || body.length > MAX_INVOICE_BYTES) {
+      throw new Error('Cloudinary returned an invalid file size.');
+    }
+    return { body, contentType };
+  } catch {
+    throw new AppError('Unable to retrieve the invoice file. Please try again.', 502, false);
+  }
+};
+
 export const deleteImageFromFolder = async (publicId: string, mediaFolder: CloudinaryImageFolder) => {
   assertConfigured();
   if (!isManagedAsset(publicId, mediaFolder)) {
@@ -165,7 +210,10 @@ export const deleteFileFromFolder = async (publicId: string, mediaFolder: Cloudi
     throw new AppError('The invoice file cannot be removed.', 400);
   }
   try {
-    await cloudinary.uploader.destroy(publicId, { invalidate: true, resource_type: 'raw' });
+    const imageDelete = await cloudinary.uploader.destroy(publicId, { invalidate: true, resource_type: 'image' });
+    if (imageDelete.result === 'not found') {
+      await cloudinary.uploader.destroy(publicId, { invalidate: true, resource_type: 'raw' });
+    }
   } catch {
     throw new AppError('Unable to remove the invoice file. Please try again.', 502, false);
   }
@@ -188,12 +236,4 @@ export const repairImageUrl = (publicId: string) => {
     secure: true,
     transformation: [{ crop: 'limit', height: 1600, width: 1600 }],
   });
-};
-
-export const grnInvoiceFileUrl = (publicId: string) => {
-  assertConfigured();
-  if (!isManagedAsset(publicId, 'grnInvoices')) {
-    throw new AppError('The supplier invoice reference is invalid.', 400);
-  }
-  return cloudinary.url(publicId, { resource_type: 'raw', secure: true });
 };
