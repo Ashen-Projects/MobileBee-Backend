@@ -58,6 +58,15 @@ const assertActiveStockLocations = async (levels: Array<{ locationId: number; mi
   }
 };
 
+const assertValidWarranty = (periodMonths: number, warrantyType: string | null | undefined) => {
+  if (periodMonths === 0 && warrantyType) {
+    throw new AppError('A warranty type requires a warranty period.', 400);
+  }
+  if (periodMonths > 0 && !warrantyType) {
+    throw new AppError('Select a warranty type when a warranty period is set.', 400);
+  }
+};
+
 const assertUniqueProduct = async (name: string, sku: string | null, excludedId?: number) => {
   const conditions = [eq(products.name, name)];
   if (sku) conditions.push(eq(products.sku, sku));
@@ -214,6 +223,8 @@ export const listProducts = async (input: unknown) => {
       parentId: products.parentId,
       priority: products.priority,
       sku: products.sku,
+      warrantyPeriodMonths: products.warrantyPeriodMonths,
+      warrantyType: products.warrantyType,
     }).from(products).leftJoin(productCategories, eq(products.categoryId, productCategories.id))
       .where(where).orderBy(desc(products.id)).limit(query.pageSize).offset(offset),
     db.select({ total: count() }).from(products).where(where),
@@ -288,6 +299,7 @@ export const listStockLevelLocations = async () => db.select({
 
 export const createProduct = async (input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
   const data = createProductSchema.parse(input);
+  assertValidWarranty(data.warrantyPeriodMonths, data.warrantyType);
   await assertActiveStockLocations(data.stockLevels);
   const { categoryId } = await resolveProductStructure(data);
   await assertUniqueProduct(data.name, data.sku ?? null);
@@ -314,6 +326,8 @@ export const createProduct = async (input: unknown, user: AuthenticatedUser, con
       seoId,
       shortDescription: data.shortDescription ?? null,
       sku: data.sku ?? null,
+      warrantyPeriodMonths: data.warrantyPeriodMonths,
+      warrantyType: data.warrantyType ?? null,
     });
     const productId = Number(result[0].insertId);
     if (data.parentId) {
@@ -364,9 +378,12 @@ export const updateProduct = async (idInput: unknown, input: unknown, user: Auth
   await assertUniqueProduct(nextName, nextSku, id);
   const nextLowest = data.lowestSellingPrice ?? current.lowestSellingPrice;
   const nextMrp = data.mrpPrice ?? current.mrpPrice;
+  const nextWarrantyPeriodMonths = data.warrantyPeriodMonths ?? current.warrantyPeriodMonths;
+  const nextWarrantyType = data.warrantyType === undefined ? current.warrantyType : data.warrantyType;
   if (!current.hasVariations && Number(nextLowest) > 0 && Number(nextMrp) > 0 && Number(nextLowest) > Number(nextMrp)) {
     throw new AppError('Lowest selling price cannot exceed MRP.', 400);
   }
+  assertValidWarranty(nextWarrantyPeriodMonths, nextWarrantyType);
 
   const obsoleteCloudinaryAssets: string[] = [];
   await db.transaction(async (transaction) => {
@@ -396,6 +413,8 @@ export const updateProduct = async (idInput: unknown, input: unknown, user: Auth
       seoId,
       shortDescription: data.shortDescription === undefined ? current.shortDescription : data.shortDescription,
       sku: nextSku,
+      warrantyPeriodMonths: nextWarrantyPeriodMonths,
+      warrantyType: nextWarrantyType,
     };
     await transaction.update(products).set(updateValues).where(eq(products.id, id));
     if (current.hasVariations && categoryId !== current.categoryId) {

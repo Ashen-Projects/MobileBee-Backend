@@ -421,6 +421,16 @@ export const seedDatabase = async (): Promise<void> => {
       module: 'stock',
     },
     {
+      description: 'View damaged-stock write-offs, their unit history, and recorded cost losses.',
+      key: USER_PERMISSIONS.STOCK_DAMAGE_VIEW,
+      module: 'stock',
+    },
+    {
+      description: 'Scan available stock and submit damaged-unit requests for administrator approval.',
+      key: USER_PERMISSIONS.STOCK_DAMAGE_CREATE,
+      module: 'stock',
+    },
+    {
       description: 'View the Mobee role and permission catalog.',
       key: USER_PERMISSIONS.ROLES_VIEW,
       module: 'roles',
