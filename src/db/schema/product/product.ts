@@ -12,6 +12,8 @@ export const products = mysqlTable(
     description: text('description'),
     lowestSellingPrice: decimal('lowest_selling_price', { precision: 10, scale: 2 }).notNull(),
     mrpPrice: decimal('mrp_price', { precision: 10, scale: 2 }).notNull(),
+    warrantyType: varchar('warranty_type', { length: 32 }),
+    warrantyPeriodMonths: int('warranty_period_months').notNull().default(0),
     maxPurchasingPrice: decimal('max_purchasing_price', { precision: 10, scale: 2 }).notNull(),
     parentId: int('parent_id'),
     categoryId: int('category_id').references(() => productCategories.id),

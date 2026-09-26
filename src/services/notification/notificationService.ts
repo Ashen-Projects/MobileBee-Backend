@@ -1,7 +1,7 @@
 import { and, count, desc, eq, gt, isNull, or, sql, type SQL } from 'drizzle-orm';
 
 import { db } from '../../db';
-import { notificationReads, notifications, userRoles } from '../../db/schema';
+import { notificationReads, notifications, roles, userRoles, users } from '../../db/schema';
 import { AppError } from '../../errors/app-error';
 import type { AuthenticatedUser } from '../auth/authService';
 import { USER_ROLES } from '../../utils/constants';
@@ -56,6 +56,28 @@ export const createNotification = async (input: CreateNotificationInput, created
 export const safeCreateNotification = async (input: CreateNotificationInput, createdBy?: number) => {
   try {
     await createNotification(input, createdBy);
+  } catch {
+    // Notifications must never break the business transaction that triggered them.
+  }
+};
+
+// Some operational events require an explicit administrator decision. Create one
+// private notification per active administrator instead of relying on a broad
+// permission notification, which could also reach non-administrator users.
+export const safeCreateAdministratorNotifications = async (input: CreateNotificationInput, createdBy?: number) => {
+  try {
+    const administrators = await db.selectDistinct({ id: users.id })
+      .from(userRoles)
+      .innerJoin(roles, eq(roles.id, userRoles.roleId))
+      .innerJoin(users, eq(users.id, userRoles.userId))
+      .where(and(eq(roles.name, USER_ROLES.ADMIN), eq(users.isActive, true)));
+
+    if (!administrators.length) return;
+    await Promise.all(administrators.map(({ id }) => createNotification({
+      ...input,
+      targetPermission: null,
+      targetUserId: id,
+    }, createdBy)));
   } catch {
     // Notifications must never break the business transaction that triggered them.
   }

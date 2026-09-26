@@ -7,6 +7,8 @@ const money = z.coerce.number().finite().min(0).max(99_999_999.99)
   .transform((value) => value.toFixed(2));
 const optionalMoney = money.optional().default('0.00');
 const optionalId = z.coerce.number().int().positive().nullable().optional();
+const warrantyTypeSchema = z.enum(['manufacturer', 'seller', 'service', 'extended']);
+const warrantyPeriodMonths = z.coerce.number().int().min(0).max(120);
 const stockLevelSchema = z.object({
   locationId: z.coerce.number().int().positive(),
   minimumStockLevel: z.coerce.number().int().min(0).max(1_000_000),
@@ -67,6 +69,8 @@ const productFields = {
   sku: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/).nullable().optional()
     .transform((value) => typeof value === 'string' ? value.toUpperCase() : value),
   stockLevels: stockLevelsSchema.default([]),
+  warrantyPeriodMonths: warrantyPeriodMonths.default(0),
+  warrantyType: warrantyTypeSchema.nullable().optional(),
 };
 
 export const createProductSchema = z.object({
@@ -94,6 +98,12 @@ export const createProductSchema = z.object({
     && Number(data.lowestSellingPrice) > Number(data.mrpPrice)) {
     context.addIssue({ code: 'custom', message: 'Lowest selling price cannot exceed MRP.', path: ['lowestSellingPrice'] });
   }
+  if (data.warrantyPeriodMonths === 0 && data.warrantyType) {
+    context.addIssue({ code: 'custom', message: 'A warranty type requires a warranty period.', path: ['warrantyType'] });
+  }
+  if (data.warrantyPeriodMonths > 0 && !data.warrantyType) {
+    context.addIssue({ code: 'custom', message: 'Select a warranty type when a warranty period is set.', path: ['warrantyType'] });
+  }
 });
 
 export const updateProductSchema = z.object({
@@ -115,6 +125,8 @@ export const updateProductSchema = z.object({
   sku: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/).nullable().optional()
     .transform((value) => typeof value === 'string' ? value.toUpperCase() : value),
   stockLevels: stockLevelsSchema.optional(),
+  warrantyPeriodMonths: warrantyPeriodMonths.optional(),
+  warrantyType: warrantyTypeSchema.nullable().optional(),
 }).strict().refine((data) => Object.keys(data).length > 0, 'At least one field is required.')
   .superRefine((data, context) => {
     if (data.images && data.images.filter(({ isPrimary }) => isPrimary).length > 1) {
