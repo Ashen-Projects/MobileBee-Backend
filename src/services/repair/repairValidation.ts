@@ -62,6 +62,12 @@ export const updateRepairChargeSchema = z.object({
   finalCost: money.finite().max(999999999.99),
 }).strict();
 
+export const addRepairPartSchema = z.object({
+  barcode: z.string().trim().min(1, 'Scan or enter a spare-part barcode.').max(64),
+}).strict();
+
+export const repairPartIdSchema = z.coerce.number().int().positive();
+
 export const recordRepairPaymentSchema = z.object({
   amount: paymentMoney,
   method: z.enum(['cash', 'card', 'bankTransfer', 'mobile']),

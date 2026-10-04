@@ -1,21 +1,24 @@
 import { randomBytes } from 'crypto';
-import { and, count, desc, eq, like, or, sql, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, like, or, sql, type SQL } from 'drizzle-orm';
 
 import { db } from '../../db';
-import { auditLogs, customers, locations, posDrawers, repairDocuments, repairHistory, repairJobs, repairPayments, users } from '../../db/schema';
+import { auditLogs, customers, locations, posDrawers, products, repairDocuments, repairHistory, repairJobs, repairParts, repairPayments, stock, stockLogs, stockStatuses, users } from '../../db/schema';
 import { AppError } from '../../errors/app-error';
 import type { AuthenticatedUser } from '../auth/authService';
 import { safeCreateNotification } from '../notification/notificationService';
 import { USER_PERMISSIONS } from '../../utils/constants';
 import { repairImageUrl } from '../media/cloudinaryService';
-import { createRepairJobSchema, listRepairJobsSchema, publicRepairStatusSchema, recordRepairPaymentSchema, repairJobIdSchema, updateRepairChargeSchema, updateRepairStatusSchema } from './repairValidation';
+import { addRepairPartSchema, createRepairJobSchema, listRepairJobsSchema, publicRepairStatusSchema, recordRepairPaymentSchema, repairJobIdSchema, repairPartIdSchema, updateRepairChargeSchema, updateRepairStatusSchema } from './repairValidation';
 
 type AuditContext = { ipAddress?: string };
 type RepairStatus = 'received' | 'inspection' | 'waitingParts' | 'inProgress' | 'completed' | 'delivered' | 'cancelled';
+type RepairPartStatus = 'reserved' | 'consumed' | 'released';
 type RepairImage = { cloudinaryPublicId: string; fileName: string };
 type RepairPaymentMethod = 'cash' | 'card' | 'bankTransfer' | 'mobile';
+type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const money = (value: number) => Number(value.toFixed(2));
+const terminalRepairStatuses = new Set<RepairStatus>(['cancelled', 'completed', 'delivered']);
 
 const currentYear = () => Number(new Intl.DateTimeFormat('en', { timeZone: 'Asia/Colombo', year: 'numeric' }).format(new Date()));
 const makePublicPath = (jobNo: string, accessToken: string) => `/dashboard/repair-status?jobNo=${encodeURIComponent(jobNo)}&token=${encodeURIComponent(accessToken)}`;
@@ -98,7 +101,7 @@ const repairDetail = async (id: number) => {
     .leftJoin(users, eq(users.id, repairJobs.assignedTo))
     .where(eq(repairJobs.id, id)).limit(1);
   if (!job) throw new AppError('Repair job not found.', 404);
-  const [history, documents, payments] = await Promise.all([
+  const [history, documents, payments, parts] = await Promise.all([
     db.select({
       id: repairHistory.id,
       newStatus: repairHistory.newStatus,
@@ -132,11 +135,119 @@ const repairDetail = async (id: number) => {
       .innerJoin(users, eq(users.id, repairPayments.receivedBy))
       .where(eq(repairPayments.repairJobId, id))
       .orderBy(repairPayments.id),
+    db.select({
+      barcode: stock.barcode,
+      consumedAt: repairParts.consumedAt,
+      description: repairParts.description,
+      id: repairParts.id,
+      productId: repairParts.productId,
+      productName: products.name,
+      releasedAt: repairParts.releasedAt,
+      status: repairParts.status,
+      stockId: repairParts.stockId,
+      timestamp: repairParts.timestamp,
+    }).from(repairParts)
+      .leftJoin(stock, eq(stock.id, repairParts.stockId))
+      .leftJoin(products, eq(products.id, repairParts.productId))
+      .where(eq(repairParts.repairJobId, id))
+      .orderBy(desc(repairParts.id)),
   ]);
   const totalPaid = money(payments.reduce((total, payment) => total + Number(payment.amount), 0));
   const balance = money(Math.max(0, Number(job.finalCost) - totalPaid));
   const paymentStatus = balance === 0 ? 'paid' : totalPaid > 0 ? 'partiallyPaid' : 'unpaid';
-  return { ...job, balance, documents, history, paymentStatus, payments, publicStatusPath: makePublicPath(job.jobNo, job.publicStatusToken), totalPaid };
+  return { ...job, balance, documents, history, parts, paymentStatus, payments, publicStatusPath: makePublicPath(job.jobNo, job.publicStatusToken), totalPaid };
+};
+
+const getStockStatusId = async (transaction: DatabaseTransaction, name: string) => {
+  const [status] = await transaction.select({ id: stockStatuses.id }).from(stockStatuses).where(eq(stockStatuses.name, name)).limit(1);
+  if (!status) throw new AppError(`Stock status '${name}' is not configured. Restart the API once after deploying this update.`, 500);
+  return status.id;
+};
+
+const releaseReservedRepairParts = async (
+  transaction: DatabaseTransaction,
+  repairJobId: number,
+  locationId: number,
+  userId: number,
+  timestamp: number,
+  note: string,
+  partIds?: number[],
+) => {
+  const [availableStatusId, repairReservedStatusId] = await Promise.all([
+    getStockStatusId(transaction, 'available'),
+    getStockStatusId(transaction, 'repair_reserved'),
+  ]);
+  const parts = await transaction.select({ id: repairParts.id, stockId: repairParts.stockId, stockLocationId: stock.locationId, stockStatus: stock.status })
+    .from(repairParts)
+    .innerJoin(stock, eq(stock.id, repairParts.stockId))
+    .where(and(
+      eq(repairParts.repairJobId, repairJobId),
+      eq(repairParts.status, 'reserved'),
+      ...(partIds?.length ? [inArray(repairParts.id, partIds)] : []),
+    ))
+    .for('update');
+  if (!parts.length) return;
+  if (parts.some((part) => part.stockLocationId !== locationId || part.stockStatus !== repairReservedStatusId)) {
+    throw new AppError('A reserved spare part is no longer in the expected stock state. Refresh the repair job before continuing.', 409);
+  }
+  const stockIds = parts.map((part) => part.stockId).filter((value): value is number => value !== null).sort((left, right) => left - right);
+  if (!stockIds.length) return;
+  await transaction.update(repairParts).set({ releasedAt: timestamp, status: 'released' })
+    .where(inArray(repairParts.id, parts.map((part) => part.id)));
+  await transaction.update(stock).set({ status: availableStatusId }).where(inArray(stock.id, stockIds));
+  await transaction.insert(stockLogs).values(parts.map((part) => ({
+    action: 'repair_part_released',
+    newLocationId: locationId,
+    newStatus: availableStatusId,
+    note,
+    previousLocationId: locationId,
+    previousStatus: repairReservedStatusId,
+    referenceId: repairJobId,
+    referenceType: 'repair_job',
+    stockId: part.stockId!,
+    timestamp,
+    userId,
+  })));
+};
+
+const consumeReservedRepairParts = async (
+  transaction: DatabaseTransaction,
+  repairJobId: number,
+  locationId: number,
+  userId: number,
+  timestamp: number,
+) => {
+  const [repairConsumedStatusId, repairReservedStatusId] = await Promise.all([
+    getStockStatusId(transaction, 'repair_consumed'),
+    getStockStatusId(transaction, 'repair_reserved'),
+  ]);
+  const parts = await transaction.select({ id: repairParts.id, stockId: repairParts.stockId, stockLocationId: stock.locationId, stockStatus: stock.status })
+    .from(repairParts)
+    .innerJoin(stock, eq(stock.id, repairParts.stockId))
+    .where(and(eq(repairParts.repairJobId, repairJobId), eq(repairParts.status, 'reserved')))
+    .for('update');
+  if (!parts.length) return;
+  if (parts.some((part) => part.stockLocationId !== locationId || part.stockStatus !== repairReservedStatusId)) {
+    throw new AppError('A reserved spare part is no longer in the expected stock state. Refresh the repair job before completing it.', 409);
+  }
+  const stockIds = parts.map((part) => part.stockId).filter((value): value is number => value !== null).sort((left, right) => left - right);
+  if (!stockIds.length) return;
+  await transaction.update(repairParts).set({ consumedAt: timestamp, status: 'consumed' })
+    .where(inArray(repairParts.id, parts.map((part) => part.id)));
+  await transaction.update(stock).set({ status: repairConsumedStatusId }).where(inArray(stock.id, stockIds));
+  await transaction.insert(stockLogs).values(parts.map((part) => ({
+    action: 'repair_part_consumed',
+    newLocationId: locationId,
+    newStatus: repairConsumedStatusId,
+    note: 'Consumed when the repair was completed.',
+    previousLocationId: locationId,
+    previousStatus: repairReservedStatusId,
+    referenceId: repairJobId,
+    referenceType: 'repair_job',
+    stockId: part.stockId!,
+    timestamp,
+    userId,
+  })));
 };
 
 export const listRepairJobs = async (input: unknown) => {
@@ -281,6 +392,137 @@ export const updateRepairCharge = async (idInput: unknown, input: unknown, user:
   return repairDetail(id);
 };
 
+export const addRepairPart = async (idInput: unknown, input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
+  const id = repairJobIdSchema.parse(idInput);
+  const data = addRepairPartSchema.parse(input);
+  if (!user.defaultLocationId) throw new AppError('Your account does not have an assigned repair location.', 400);
+
+  await db.transaction(async (transaction) => {
+    const [job] = await transaction.select({ jobNo: repairJobs.jobNo, locationId: repairJobs.locationId, status: repairJobs.status })
+      .from(repairJobs).where(eq(repairJobs.id, id)).limit(1).for('update');
+    if (!job) throw new AppError('Repair job not found.', 404);
+    if (job.locationId !== user.defaultLocationId) throw new AppError('You can only use stock at your assigned repair location.', 403);
+    if (terminalRepairStatuses.has(job.status as RepairStatus)) {
+      throw new AppError('Parts can only be added before the repair is completed, delivered, or cancelled.', 409);
+    }
+
+    const [availableStatusId, repairReservedStatusId] = await Promise.all([
+      getStockStatusId(transaction, 'available'),
+      getStockStatusId(transaction, 'repair_reserved'),
+    ]);
+    const [unit] = await transaction.select({
+      barcode: stock.barcode,
+      costPrice: stock.costPrice,
+      locationId: stock.locationId,
+      productId: stock.productId,
+      productName: products.name,
+      status: stock.status,
+      stockId: stock.id,
+    }).from(stock)
+      .leftJoin(products, eq(products.id, stock.productId))
+      .where(eq(stock.barcode, data.barcode)).limit(1).for('update');
+    if (!unit) throw new AppError('No stock unit was found for this barcode.', 404);
+    if (unit.locationId !== user.defaultLocationId) throw new AppError('This spare part belongs to a different location.', 409);
+    if (unit.status !== availableStatusId) throw new AppError('This spare part is not available. It may already be reserved, sold, or written off.', 409);
+
+    const [existing] = await transaction.select({ id: repairParts.id, status: repairParts.status })
+      .from(repairParts)
+      .where(and(eq(repairParts.repairJobId, id), eq(repairParts.stockId, unit.stockId)))
+      .limit(1).for('update');
+    if (existing?.status === 'reserved') throw new AppError('This spare part is already reserved for this repair.', 409);
+    if (existing?.status === 'consumed') throw new AppError('This spare part was already consumed by this repair and cannot be added again.', 409);
+
+    const timestamp = Date.now();
+    const description = unit.productName || `Stock unit ${unit.barcode || unit.stockId}`;
+    if (existing) {
+      await transaction.update(repairParts).set({
+        consumedAt: null,
+        description,
+        productId: unit.productId,
+        releasedAt: null,
+        status: 'reserved',
+        timestamp,
+        unitPrice: unit.costPrice,
+      }).where(eq(repairParts.id, existing.id));
+    } else {
+      await transaction.insert(repairParts).values({
+        description,
+        productId: unit.productId,
+        quantity: 1,
+        repairJobId: id,
+        status: 'reserved',
+        stockId: unit.stockId,
+        timestamp,
+        unitPrice: unit.costPrice,
+      });
+    }
+    await transaction.update(stock).set({ status: repairReservedStatusId }).where(eq(stock.id, unit.stockId));
+    await transaction.insert(stockLogs).values({
+      action: 'repair_part_reserved',
+      newLocationId: job.locationId,
+      newStatus: repairReservedStatusId,
+      note: `Reserved as a spare part for ${job.jobNo}.`,
+      previousLocationId: job.locationId,
+      previousStatus: availableStatusId,
+      referenceId: id,
+      referenceType: 'repair_job',
+      stockId: unit.stockId,
+      timestamp,
+      userId: user.id,
+    });
+    await transaction.insert(auditLogs).values({
+      action: 'repair_part_reserved',
+      entityId: id,
+      entityType: 'repair_job',
+      ipAddress: context.ipAddress,
+      module: 'repairs',
+      newValues: { barcode: unit.barcode, productId: unit.productId, stockId: unit.stockId },
+      timestamp,
+      userId: user.id,
+    });
+  });
+  return repairDetail(id);
+};
+
+export const releaseRepairPart = async (idInput: unknown, partIdInput: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
+  const id = repairJobIdSchema.parse(idInput);
+  const partId = repairPartIdSchema.parse(partIdInput);
+  if (!user.defaultLocationId) throw new AppError('Your account does not have an assigned repair location.', 400);
+
+  await db.transaction(async (transaction) => {
+    const [job] = await transaction.select({ jobNo: repairJobs.jobNo, locationId: repairJobs.locationId, status: repairJobs.status })
+      .from(repairJobs).where(eq(repairJobs.id, id)).limit(1).for('update');
+    if (!job) throw new AppError('Repair job not found.', 404);
+    if (job.locationId !== user.defaultLocationId) throw new AppError('You can only release stock at your assigned repair location.', 403);
+    if (terminalRepairStatuses.has(job.status as RepairStatus)) {
+      throw new AppError('Parts cannot be released after the repair is completed, delivered, or cancelled.', 409);
+    }
+    const repairReservedStatusId = await getStockStatusId(transaction, 'repair_reserved');
+    const [part] = await transaction.select({ id: repairParts.id, stockId: repairParts.stockId, status: repairParts.status })
+      .from(repairParts).where(and(eq(repairParts.id, partId), eq(repairParts.repairJobId, id))).limit(1).for('update');
+    if (!part) throw new AppError('Repair spare part not found.', 404);
+    if (part.status !== 'reserved' || !part.stockId) throw new AppError('Only currently reserved spare parts can be released.', 409);
+    const [unit] = await transaction.select({ locationId: stock.locationId, status: stock.status }).from(stock)
+      .where(eq(stock.id, part.stockId)).limit(1).for('update');
+    if (!unit || unit.locationId !== job.locationId || unit.status !== repairReservedStatusId) {
+      throw new AppError('This spare part is no longer reserved for this repair. Refresh the repair job before continuing.', 409);
+    }
+    const timestamp = Date.now();
+    await releaseReservedRepairParts(transaction, id, job.locationId, user.id, timestamp, `Released from ${job.jobNo}; not used in the repair.`, [partId]);
+    await transaction.insert(auditLogs).values({
+      action: 'repair_part_released',
+      entityId: id,
+      entityType: 'repair_job',
+      ipAddress: context.ipAddress,
+      module: 'repairs',
+      newValues: { partId, stockId: part.stockId },
+      timestamp,
+      userId: user.id,
+    });
+  });
+  return repairDetail(id);
+};
+
 export const collectRepairPayment = async (idInput: unknown, input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
   const id = repairJobIdSchema.parse(idInput);
   const data = recordRepairPaymentSchema.parse(input);
@@ -354,10 +596,16 @@ export const updateRepairStatus = async (idInput: unknown, input: unknown, user:
   if (job.status === data.status) return repairDetail(id);
   let previousStatus = job.status as RepairStatus;
   await db.transaction(async (transaction) => {
-    const [lockedJob] = await transaction.select({ finalCost: repairJobs.finalCost, status: repairJobs.status })
+    const [lockedJob] = await transaction.select({ finalCost: repairJobs.finalCost, locationId: repairJobs.locationId, status: repairJobs.status })
       .from(repairJobs).where(eq(repairJobs.id, id)).limit(1).for('update');
     if (!lockedJob) throw new AppError('Repair job not found.', 404);
     previousStatus = lockedJob.status as RepairStatus;
+    if (lockedJob.status === 'delivered' || lockedJob.status === 'cancelled') {
+      throw new AppError('A delivered or cancelled repair cannot be changed.', 409);
+    }
+    if (lockedJob.status === 'completed' && data.status !== 'delivered') {
+      throw new AppError('A completed repair can only move to Delivered. Its reserved parts have already been consumed.', 409);
+    }
     if (data.status === 'delivered') {
       if (lockedJob.status !== 'completed') throw new AppError('A repair must be completed before it can be delivered.', 409);
       const [{ totalPaid }] = await transaction.select({ totalPaid: sql<string>`coalesce(sum(${repairPayments.amount}), 0)` })
@@ -367,6 +615,12 @@ export const updateRepairStatus = async (idInput: unknown, input: unknown, user:
       }
     }
     const timestamp = Date.now();
+    if (data.status === 'completed') {
+      await consumeReservedRepairParts(transaction, id, lockedJob.locationId, user.id, timestamp);
+    }
+    if (data.status === 'cancelled') {
+      await releaseReservedRepairParts(transaction, id, lockedJob.locationId, user.id, timestamp, 'Released because the repair job was cancelled.');
+    }
     await transaction.update(repairJobs).set({ status: data.status }).where(eq(repairJobs.id, id));
     await transaction.insert(repairHistory).values({ newStatus: data.status, note: data.note || null, oldStatus: lockedJob.status, repairJobId: id, timestamp, userId: user.id });
     if (data.status === 'inspection') {

@@ -56,6 +56,8 @@ export const STOCK_STATUS = {
   PENDING_GRN_APPROVAL: 'pending_grn_approval',
   RESERVED: 'reserved',
   RETURNED_TO_SUPPLIER: 'returned_to_supplier',
+  REPAIR_CONSUMED: 'repair_consumed',
+  REPAIR_RESERVED: 'repair_reserved',
   SOLD: 'sold',
   UNDER_REPAIR: 'under_repair',
 } as const;
@@ -109,6 +111,7 @@ export const USER_PERMISSIONS = {
   PURCHASE_ORDERS_VIEW: 'purchase_orders.view',
   REPAIRS_CREATE: 'repairs.create',
   REPAIRS_COLLECT_PAYMENT: 'repairs.collect_payment',
+  REPAIRS_MANAGE_PARTS: 'repairs.manage_parts',
   REPAIRS_UPDATE: 'repairs.update',
   REPAIRS_VIEW: 'repairs.view',
   SALES_CREATE: 'sales.create',
