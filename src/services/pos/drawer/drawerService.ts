@@ -1,7 +1,7 @@
 import { and, count, eq, sql } from 'drizzle-orm';
 
 import { db } from '../../../db';
-import { auditLogs, locations, posDrawers, salePayments, sales, users } from '../../../db/schema';
+import { auditLogs, locations, posDrawers, repairPayments, salePayments, sales, users } from '../../../db/schema';
 import { AppError } from '../../../errors/app-error';
 import type { AuthenticatedUser } from '../../auth/authService';
 import { safeCreateNotification } from '../../notification/notificationService';
@@ -23,6 +23,7 @@ const drawerSelect = {
   countedBankTransferTotal: posDrawers.countedBankTransferTotal,
   countedCardTotal: posDrawers.countedCardTotal,
   countedCash: posDrawers.countedCash,
+  countedMobileTotal: posDrawers.countedMobileTotal,
   cashExpenseAmount: posDrawers.cashExpenseAmount,
   id: posDrawers.id,
   locationId: posDrawers.locationId,
@@ -94,29 +95,62 @@ export const openDrawer = async (input: unknown, user: AuthenticatedUser, contex
   return drawer;
 };
 
+/*
+ * Every repair payment is tied to the cashier's open drawer. Keeping this
+ * summary alongside sales makes the end-of-day counts reconcilable without
+ * treating a repair charge as inventory revenue.
+ */
 const drawerSummary = async (drawerId: number, openingCash: number, cashExpenseAmount: number) => {
-  const [{ salesCount, discountAmount, totalAmount }] = await db.select({
-    discountAmount: sql<string>`coalesce(sum(${sales.discountAmount}), 0)`,
-    salesCount: count(sales.id),
-    totalAmount: sql<string>`coalesce(sum(${sales.totalAmount}), 0)`,
-  }).from(sales).where(and(eq(sales.drawerId, drawerId), eq(sales.status, 'completed')));
+  const [[{ salesCount, discountAmount, totalAmount }], salePaymentRows, repairPaymentRows] = await Promise.all([
+    db.select({
+      discountAmount: sql<string>`coalesce(sum(${sales.discountAmount}), 0)`,
+      salesCount: count(sales.id),
+      totalAmount: sql<string>`coalesce(sum(${sales.totalAmount}), 0)`,
+    }).from(sales).where(and(eq(sales.drawerId, drawerId), eq(sales.status, 'completed'))),
+    db.select({
+      amount: sql<string>`coalesce(sum(${salePayments.amount}), 0)`,
+      method: salePayments.method,
+    }).from(salePayments)
+      .innerJoin(sales, eq(sales.id, salePayments.saleId))
+      .where(and(eq(sales.drawerId, drawerId), eq(sales.status, 'completed')))
+      .groupBy(salePayments.method),
+    db.select({
+      amount: sql<string>`coalesce(sum(${repairPayments.amount}), 0)`,
+      method: repairPayments.method,
+      paymentCount: count(repairPayments.id),
+    }).from(repairPayments)
+      .where(eq(repairPayments.drawerId, drawerId))
+      .groupBy(repairPayments.method),
+  ]);
 
-  const payments = await db.select({
-    amount: sql<string>`coalesce(sum(${salePayments.amount}), 0)`,
-    method: salePayments.method,
-  }).from(salePayments)
-    .innerJoin(sales, eq(sales.id, salePayments.saleId))
-    .where(and(eq(sales.drawerId, drawerId), eq(sales.status, 'completed')))
-    .groupBy(salePayments.method);
-
-  const byMethod = new Map(payments.map((payment) => [payment.method, Number(payment.amount)]));
-  const cashSales = money(byMethod.get('cash') ?? 0);
+  const salesByMethod = new Map(salePaymentRows.map((payment) => [payment.method, Number(payment.amount)]));
+  const repairsByMethod = new Map(repairPaymentRows.map((payment) => [payment.method, Number(payment.amount)]));
+  const repairPaymentCount = repairPaymentRows.reduce((total, payment) => total + Number(payment.paymentCount), 0);
+  const cashSales = money(salesByMethod.get('cash') ?? 0);
+  const cardSales = money(salesByMethod.get('card') ?? 0);
+  const bankTransferSales = money(salesByMethod.get('bankTransfer') ?? 0);
+  const mobileSales = money(salesByMethod.get('mobile') ?? 0);
+  const cashRepairPayments = money(repairsByMethod.get('cash') ?? 0);
+  const cardRepairPayments = money(repairsByMethod.get('card') ?? 0);
+  const bankTransferRepairPayments = money(repairsByMethod.get('bankTransfer') ?? 0);
+  const mobileRepairPayments = money(repairsByMethod.get('mobile') ?? 0);
+  const repairPaymentTotal = money(cashRepairPayments + cardRepairPayments + bankTransferRepairPayments + mobileRepairPayments);
   return {
-    bankTransferSales: money(byMethod.get('bankTransfer') ?? 0),
-    cardSales: money(byMethod.get('card') ?? 0),
+    bankTransferRepairPayments,
+    bankTransferSales,
+    cardRepairPayments,
+    cardSales,
+    cashRepairPayments,
     cashSales,
     discountAmount: money(Number(discountAmount)),
-    expectedCash: money(openingCash + cashSales - cashExpenseAmount),
+    expectedBankTransferTotal: money(bankTransferSales + bankTransferRepairPayments),
+    expectedCardTotal: money(cardSales + cardRepairPayments),
+    expectedCash: money(openingCash + cashSales + cashRepairPayments - cashExpenseAmount),
+    expectedMobileTotal: money(mobileSales + mobileRepairPayments),
+    mobileRepairPayments,
+    mobileSales,
+    repairPaymentCount,
+    repairPaymentTotal,
     salesCount: Number(salesCount),
     totalAmount: money(Number(totalAmount)),
   };
@@ -141,6 +175,7 @@ export const closeDrawer = async (input: unknown, user: AuthenticatedUser, conte
       countedBankTransferTotal: String(data.countedBankTransferTotal),
       countedCardTotal: String(data.countedCardTotal),
       countedCash: String(data.countedCash),
+      countedMobileTotal: String(data.countedMobileTotal),
       status: 'closed',
     }).where(eq(posDrawers.id, drawer.id));
     await transaction.insert(auditLogs).values({
@@ -162,7 +197,7 @@ export const closeDrawer = async (input: unknown, user: AuthenticatedUser, conte
     entityType: 'pos_drawer',
     locationId,
     message: difference === 0
-      ? `Drawer closed with no cash difference. Sales total LKR ${summary.totalAmount.toLocaleString('en-LK', { minimumFractionDigits: 2 })}.`
+      ? `Drawer closed with no cash difference. Sales total LKR ${summary.totalAmount.toLocaleString('en-LK', { minimumFractionDigits: 2 })}; repair payments LKR ${summary.repairPaymentTotal.toLocaleString('en-LK', { minimumFractionDigits: 2 })}.`
       : `Drawer closed with ${difference > 0 ? 'over' : 'short'} difference of LKR ${Math.abs(difference).toLocaleString('en-LK', { minimumFractionDigits: 2 })}. Expected cash LKR ${summary.expectedCash.toLocaleString('en-LK', { minimumFractionDigits: 2 })}, counted LKR ${money(data.countedCash).toLocaleString('en-LK', { minimumFractionDigits: 2 })}.`,
     module: 'sales',
     severity: difference === 0 ? 'success' : 'critical',

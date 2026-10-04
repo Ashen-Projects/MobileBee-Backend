@@ -1,18 +1,21 @@
 import { randomBytes } from 'crypto';
-import { and, count, desc, eq, like, or, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, like, or, sql, type SQL } from 'drizzle-orm';
 
 import { db } from '../../db';
-import { auditLogs, customers, locations, repairDocuments, repairHistory, repairJobs, users } from '../../db/schema';
+import { auditLogs, customers, locations, posDrawers, repairDocuments, repairHistory, repairJobs, repairPayments, users } from '../../db/schema';
 import { AppError } from '../../errors/app-error';
 import type { AuthenticatedUser } from '../auth/authService';
 import { safeCreateNotification } from '../notification/notificationService';
 import { USER_PERMISSIONS } from '../../utils/constants';
 import { repairImageUrl } from '../media/cloudinaryService';
-import { createRepairJobSchema, listRepairJobsSchema, publicRepairStatusSchema, repairJobIdSchema, updateRepairStatusSchema } from './repairValidation';
+import { createRepairJobSchema, listRepairJobsSchema, publicRepairStatusSchema, recordRepairPaymentSchema, repairJobIdSchema, updateRepairChargeSchema, updateRepairStatusSchema } from './repairValidation';
 
 type AuditContext = { ipAddress?: string };
 type RepairStatus = 'received' | 'inspection' | 'waitingParts' | 'inProgress' | 'completed' | 'delivered' | 'cancelled';
 type RepairImage = { cloudinaryPublicId: string; fileName: string };
+type RepairPaymentMethod = 'cash' | 'card' | 'bankTransfer' | 'mobile';
+
+const money = (value: number) => Number(value.toFixed(2));
 
 const currentYear = () => Number(new Intl.DateTimeFormat('en', { timeZone: 'Asia/Colombo', year: 'numeric' }).format(new Date()));
 const makePublicPath = (jobNo: string, accessToken: string) => `/dashboard/repair-status?jobNo=${encodeURIComponent(jobNo)}&token=${encodeURIComponent(accessToken)}`;
@@ -95,7 +98,7 @@ const repairDetail = async (id: number) => {
     .leftJoin(users, eq(users.id, repairJobs.assignedTo))
     .where(eq(repairJobs.id, id)).limit(1);
   if (!job) throw new AppError('Repair job not found.', 404);
-  const [history, documents] = await Promise.all([
+  const [history, documents, payments] = await Promise.all([
     db.select({
       id: repairHistory.id,
       newStatus: repairHistory.newStatus,
@@ -116,8 +119,24 @@ const repairDetail = async (id: number) => {
     }).from(repairDocuments)
       .where(eq(repairDocuments.repairJobId, id))
       .orderBy(desc(repairDocuments.id)),
+    db.select({
+      amount: repairPayments.amount,
+      drawerId: repairPayments.drawerId,
+      id: repairPayments.id,
+      method: repairPayments.method,
+      receivedBy: repairPayments.receivedBy,
+      receivedByName: users.displayName,
+      referenceNo: repairPayments.referenceNo,
+      timestamp: repairPayments.timestamp,
+    }).from(repairPayments)
+      .innerJoin(users, eq(users.id, repairPayments.receivedBy))
+      .where(eq(repairPayments.repairJobId, id))
+      .orderBy(repairPayments.id),
   ]);
-  return { ...job, documents, history, publicStatusPath: makePublicPath(job.jobNo, job.publicStatusToken) };
+  const totalPaid = money(payments.reduce((total, payment) => total + Number(payment.amount), 0));
+  const balance = money(Math.max(0, Number(job.finalCost) - totalPaid));
+  const paymentStatus = balance === 0 ? 'paid' : totalPaid > 0 ? 'partiallyPaid' : 'unpaid';
+  return { ...job, balance, documents, history, paymentStatus, payments, publicStatusPath: makePublicPath(job.jobNo, job.publicStatusToken), totalPaid };
 };
 
 export const listRepairJobs = async (input: unknown) => {
@@ -230,16 +249,126 @@ export const createRepairJob = async (input: unknown, user: AuthenticatedUser, c
   return detail;
 };
 
+export const updateRepairCharge = async (idInput: unknown, input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
+  const id = repairJobIdSchema.parse(idInput);
+  const data = updateRepairChargeSchema.parse(input);
+  await db.transaction(async (transaction) => {
+    const [job] = await transaction.select({ finalCost: repairJobs.finalCost, status: repairJobs.status })
+      .from(repairJobs).where(eq(repairJobs.id, id)).limit(1).for('update');
+    if (!job) throw new AppError('Repair job not found.', 404);
+    if (job.status === 'cancelled' || job.status === 'delivered') {
+      throw new AppError('The final charge cannot be changed after a repair is cancelled or delivered.', 409);
+    }
+    const [{ totalPaid }] = await transaction.select({ totalPaid: sql<string>`coalesce(sum(${repairPayments.amount}), 0)` })
+      .from(repairPayments).where(eq(repairPayments.repairJobId, id));
+    if (data.finalCost < Number(totalPaid)) {
+      throw new AppError('The final charge cannot be lower than payments already received.', 409);
+    }
+    const timestamp = Date.now();
+    await transaction.update(repairJobs).set({ finalCost: String(money(data.finalCost)) }).where(eq(repairJobs.id, id));
+    await transaction.insert(auditLogs).values({
+      action: 'update',
+      entityId: id,
+      entityType: 'repair_job',
+      ipAddress: context.ipAddress,
+      module: 'repairs',
+      newValues: { finalCost: money(data.finalCost) },
+      oldValues: { finalCost: Number(job.finalCost) },
+      timestamp,
+      userId: user.id,
+    });
+  });
+  return repairDetail(id);
+};
+
+export const collectRepairPayment = async (idInput: unknown, input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
+  const id = repairJobIdSchema.parse(idInput);
+  const data = recordRepairPaymentSchema.parse(input);
+  if (!user.defaultLocationId) throw new AppError('Your account does not have an assigned POS location.', 400);
+  const paymentId = await db.transaction(async (transaction) => {
+    const [job] = await transaction.select({ finalCost: repairJobs.finalCost, jobNo: repairJobs.jobNo, locationId: repairJobs.locationId, status: repairJobs.status })
+      .from(repairJobs).where(eq(repairJobs.id, id)).limit(1).for('update');
+    if (!job) throw new AppError('Repair job not found.', 404);
+    if (job.locationId !== user.defaultLocationId) throw new AppError('You can only collect payment for repairs at your assigned location.', 403);
+    if (job.status !== 'completed') throw new AppError('Mark the repair as completed before collecting payment.', 409);
+    const finalCost = money(Number(job.finalCost));
+    if (finalCost <= 0) throw new AppError('Set the final repair charge before collecting payment.', 409);
+
+    const [drawer] = await transaction.select({ id: posDrawers.id })
+      .from(posDrawers)
+      .where(and(eq(posDrawers.userId, user.id), eq(posDrawers.locationId, user.defaultLocationId), eq(posDrawers.status, 'open')))
+      .limit(1)
+      .for('update');
+    if (!drawer) throw new AppError('Open your POS drawer before collecting a repair payment.', 409);
+
+    const [{ totalPaid }] = await transaction.select({ totalPaid: sql<string>`coalesce(sum(${repairPayments.amount}), 0)` })
+      .from(repairPayments).where(eq(repairPayments.repairJobId, id));
+    const balance = money(Math.max(0, finalCost - Number(totalPaid)));
+    const received = money(data.amount);
+    if (received > balance) throw new AppError(`Payment cannot exceed the remaining balance of LKR ${balance.toLocaleString('en-LK', { minimumFractionDigits: 2 })}.`, 409);
+
+    const timestamp = Date.now();
+    const result = await transaction.insert(repairPayments).values({
+      amount: String(received),
+      drawerId: drawer.id,
+      method: data.method as RepairPaymentMethod,
+      receivedBy: user.id,
+      referenceNo: data.referenceNo || null,
+      repairJobId: id,
+      timestamp,
+    });
+    const insertedId = Number(result[0].insertId);
+    await transaction.insert(auditLogs).values({
+      action: 'create',
+      entityId: insertedId,
+      entityType: 'repair_payment',
+      ipAddress: context.ipAddress,
+      module: 'repairs',
+      newValues: { amount: received, drawerId: drawer.id, method: data.method, referenceNo: data.referenceNo || null, repairJobId: id },
+      timestamp,
+      userId: user.id,
+    });
+    return insertedId;
+  });
+  const detail = await repairDetail(id);
+  const payment = detail.payments.find((value) => value.id === paymentId);
+  if (!payment) throw new AppError('Repair payment was recorded but could not be loaded.', 500);
+  await safeCreateNotification({
+    entityId: id,
+    entityType: 'repair_payment',
+    locationId: detail.locationId,
+    message: `${detail.jobNo}: ${payment.method} payment of LKR ${Number(payment.amount).toLocaleString('en-LK', { minimumFractionDigits: 2 })} received. Remaining balance: LKR ${detail.balance.toLocaleString('en-LK', { minimumFractionDigits: 2 })}.`,
+    module: 'repairs',
+    severity: detail.balance === 0 ? 'success' : 'info',
+    targetPermission: USER_PERMISSIONS.REPAIRS_VIEW,
+    title: detail.balance === 0 ? 'Repair payment completed' : 'Repair payment received',
+  }, user.id);
+  return { detail, payment };
+};
+
 export const updateRepairStatus = async (idInput: unknown, input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
   const id = repairJobIdSchema.parse(idInput);
   const data = updateRepairStatusSchema.parse(input);
   const [job] = await db.select({ id: repairJobs.id, status: repairJobs.status }).from(repairJobs).where(eq(repairJobs.id, id)).limit(1);
   if (!job) throw new AppError('Repair job not found.', 404);
   if (job.status === data.status) return repairDetail(id);
+  let previousStatus = job.status as RepairStatus;
   await db.transaction(async (transaction) => {
+    const [lockedJob] = await transaction.select({ finalCost: repairJobs.finalCost, status: repairJobs.status })
+      .from(repairJobs).where(eq(repairJobs.id, id)).limit(1).for('update');
+    if (!lockedJob) throw new AppError('Repair job not found.', 404);
+    previousStatus = lockedJob.status as RepairStatus;
+    if (data.status === 'delivered') {
+      if (lockedJob.status !== 'completed') throw new AppError('A repair must be completed before it can be delivered.', 409);
+      const [{ totalPaid }] = await transaction.select({ totalPaid: sql<string>`coalesce(sum(${repairPayments.amount}), 0)` })
+        .from(repairPayments).where(eq(repairPayments.repairJobId, id));
+      if (money(Number(totalPaid)) < money(Number(lockedJob.finalCost))) {
+        throw new AppError('Collect the remaining repair balance before delivering the device.', 409);
+      }
+    }
     const timestamp = Date.now();
     await transaction.update(repairJobs).set({ status: data.status }).where(eq(repairJobs.id, id));
-    await transaction.insert(repairHistory).values({ newStatus: data.status, note: data.note || null, oldStatus: job.status, repairJobId: id, timestamp, userId: user.id });
+    await transaction.insert(repairHistory).values({ newStatus: data.status, note: data.note || null, oldStatus: lockedJob.status, repairJobId: id, timestamp, userId: user.id });
     if (data.status === 'inspection') {
       await transaction.insert(repairDocuments).values(repairImageDocuments(data.inspectionPhotos, 'inspectionPhoto', id, user.id, timestamp));
     }
@@ -250,7 +379,7 @@ export const updateRepairStatus = async (idInput: unknown, input: unknown, user:
       ipAddress: context.ipAddress,
       module: 'repairs',
       newValues: { inspectionPhotoCount: data.inspectionPhotos.length, status: data.status },
-      oldValues: { status: job.status },
+      oldValues: { status: lockedJob.status },
       timestamp,
       userId: user.id,
     });
@@ -260,7 +389,7 @@ export const updateRepairStatus = async (idInput: unknown, input: unknown, user:
     entityId: detail.id,
     entityType: 'repair_job',
     locationId: detail.locationId,
-    message: `${detail.jobNo} moved from ${statusLabels[job.status as RepairStatus] ?? job.status} to ${statusLabels[detail.status as RepairStatus] ?? detail.status}.`,
+    message: `${detail.jobNo} moved from ${statusLabels[previousStatus] ?? previousStatus} to ${statusLabels[detail.status as RepairStatus] ?? detail.status}.`,
     module: 'repairs',
     severity: data.status === 'completed' ? 'success' : data.status === 'cancelled' ? 'warning' : 'info',
     targetPermission: USER_PERMISSIONS.REPAIRS_VIEW,
