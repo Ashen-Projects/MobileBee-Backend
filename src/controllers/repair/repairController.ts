@@ -22,6 +22,14 @@ export const updateRepairStatus = async (req: Request, res: Response): Promise<v
   res.status(200).json({ success: true, data: await repairService.updateRepairStatus(req.params.id, req.body, user(res), context(req)) });
 };
 
+export const updateRepairCharge = async (req: Request, res: Response): Promise<void> => {
+  res.status(200).json({ success: true, data: await repairService.updateRepairCharge(req.params.id, req.body, user(res), context(req)) });
+};
+
+export const collectRepairPayment = async (req: Request, res: Response): Promise<void> => {
+  res.status(201).json({ success: true, data: await repairService.collectRepairPayment(req.params.id, req.body, user(res), context(req)) });
+};
+
 export const publicRepairStatus = async (req: Request, res: Response): Promise<void> => {
   res.status(200).json({ success: true, data: await repairService.publicRepairStatus(req.query) });
 };

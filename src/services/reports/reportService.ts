@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 
 import { db } from '../../db';
-import { grns, locations, products, repairJobs, saleItems, salePayments, sales, stock, stockStatuses, suppliers } from '../../db/schema';
+import { grns, locations, products, repairJobs, repairPayments, saleItems, salePayments, sales, stock, stockStatuses, suppliers } from '../../db/schema';
 import { reportQuerySchema, type ReportQuery } from './reportValidation';
 import type { AuthenticatedUser } from '../auth/authService';
 import { resolveLocationScope } from '../shared/locationAccess';
@@ -156,7 +156,8 @@ export const purchasingReport = async (input: unknown, user: AuthenticatedUser) 
 export const repairsReport = async (input: unknown, user: AuthenticatedUser) => {
   const query = await scopedQuery(input, user);
   const where = and(...dateFilters(repairJobs.timestamp, query), ...locationFilter(repairJobs.locationId, query));
-  const [summaryRows, byStatus, rows] = await Promise.all([
+  const paymentWhere = and(...dateFilters(repairPayments.timestamp, query), ...locationFilter(repairJobs.locationId, query));
+  const [summaryRows, byStatus, rows, paymentRows] = await Promise.all([
     db.select({
       estimatedCost: sql<string>`coalesce(sum(${repairJobs.estimatedCost}), 0)`,
       finalCost: sql<string>`coalesce(sum(${repairJobs.finalCost}), 0)`,
@@ -173,10 +174,18 @@ export const repairsReport = async (input: unknown, user: AuthenticatedUser) => 
       status: repairJobs.status,
       timestamp: repairJobs.timestamp,
     }).from(repairJobs).innerJoin(locations, eq(locations.id, repairJobs.locationId)).where(where).orderBy(desc(repairJobs.timestamp)).limit(500),
+    db.select({
+      method: repairPayments.method,
+      total: sql<string>`coalesce(sum(${repairPayments.amount}), 0)`,
+    }).from(repairPayments)
+      .innerJoin(repairJobs, eq(repairJobs.id, repairPayments.repairJobId))
+      .where(paymentWhere)
+      .groupBy(repairPayments.method),
   ]);
   const summary = summaryRows[0] ?? { estimatedCost: 0, finalCost: 0, repairCount: 0 };
+  const paymentReceived = paymentRows.reduce((total, row) => total + money(row.total), 0);
   return {
     rows: rows.map((row) => ({ ...row, estimatedCost: money(row.estimatedCost), finalCost: money(row.finalCost) })),
-    summary: { estimatedCost: money(summary.estimatedCost), finalCost: money(summary.finalCost), repairCount: Number(summary.repairCount), statusTotals: byStatus.map((row) => ({ status: row.status, total: Number(row.total) })) },
+    summary: { estimatedCost: money(summary.estimatedCost), finalCost: money(summary.finalCost), paymentMethodTotals: Object.fromEntries(paymentRows.map((row) => [row.method, money(row.total)])), paymentReceived, repairCount: Number(summary.repairCount), statusTotals: byStatus.map((row) => ({ status: row.status, total: Number(row.total) })) },
   };
 };

@@ -13,5 +13,6 @@ export const closeDrawerSchema = z.object({
   countedBankTransferTotal: money.default(0),
   countedCardTotal: money.default(0),
   countedCash: money,
+  countedMobileTotal: money.default(0),
   note,
 }).strict();

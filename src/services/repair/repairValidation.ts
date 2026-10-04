@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 const money = z.coerce.number().min(0);
+const paymentMoney = z.coerce.number().finite().positive().max(999999999.99);
 
 export const repairJobIdSchema = z.coerce.number().int().positive();
 
@@ -53,6 +54,24 @@ export const updateRepairStatusSchema = z.object({
       code: z.ZodIssueCode.custom,
       message: 'Inspection photos can only be attached when moving a repair to Inspection.',
       path: ['inspectionPhotos'],
+    });
+  }
+});
+
+export const updateRepairChargeSchema = z.object({
+  finalCost: money.finite().max(999999999.99),
+}).strict();
+
+export const recordRepairPaymentSchema = z.object({
+  amount: paymentMoney,
+  method: z.enum(['cash', 'card', 'bankTransfer', 'mobile']),
+  referenceNo: z.string().trim().max(255).optional(),
+}).strict().superRefine((data, context) => {
+  if (data.method !== 'cash' && !data.referenceNo) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'A payment reference is required for card, bank transfer, and mobile payments.',
+      path: ['referenceNo'],
     });
   }
 });

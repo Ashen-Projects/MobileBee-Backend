@@ -18,6 +18,7 @@ export const posDrawers = mysqlTable(
     countedCash: decimal('counted_cash', { precision: 12, scale: 2 }),
     countedCardTotal: decimal('counted_card_total', { precision: 12, scale: 2 }),
     countedBankTransferTotal: decimal('counted_bank_transfer_total', { precision: 12, scale: 2 }),
+    countedMobileTotal: decimal('counted_mobile_total', { precision: 12, scale: 2 }),
     cashExpenseAmount: decimal('cash_expense_amount', { precision: 12, scale: 2 }),
     openNote: text('open_note'),
     closeNote: text('close_note'),

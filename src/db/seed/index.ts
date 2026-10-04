@@ -331,6 +331,11 @@ export const seedDatabase = async (): Promise<void> => {
       module: 'repairs',
     },
     {
+      description: 'Collect repair payments through an open POS drawer and issue payment receipts.',
+      key: USER_PERMISSIONS.REPAIRS_COLLECT_PAYMENT,
+      module: 'repairs',
+    },
+    {
       description: 'Update repair job stages and repair progress history.',
       key: USER_PERMISSIONS.REPAIRS_UPDATE,
       module: 'repairs',

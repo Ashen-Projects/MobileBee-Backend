@@ -108,6 +108,7 @@ export const USER_PERMISSIONS = {
   PURCHASE_ORDERS_UPDATE: 'purchase_orders.update',
   PURCHASE_ORDERS_VIEW: 'purchase_orders.view',
   REPAIRS_CREATE: 'repairs.create',
+  REPAIRS_COLLECT_PAYMENT: 'repairs.collect_payment',
   REPAIRS_UPDATE: 'repairs.update',
   REPAIRS_VIEW: 'repairs.view',
   SALES_CREATE: 'sales.create',
