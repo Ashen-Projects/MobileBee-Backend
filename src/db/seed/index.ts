@@ -76,6 +76,8 @@ export const seedDatabase = async (): Promise<void> => {
     { isActive: true, isSellable: false, label: 'Pending GRN Approval', name: STOCK_STATUS.PENDING_GRN_APPROVAL },
     { isActive: true, isSellable: false, label: 'GRN Declined', name: STOCK_STATUS.GRN_DECLINED },
     { isActive: true, isSellable: false, label: 'Reserved', name: STOCK_STATUS.RESERVED },
+    { isActive: true, isSellable: false, label: 'Reserved for Repair', name: STOCK_STATUS.REPAIR_RESERVED },
+    { isActive: true, isSellable: false, label: 'Consumed in Repair', name: STOCK_STATUS.REPAIR_CONSUMED },
     { isActive: true, isSellable: false, label: 'Sold', name: STOCK_STATUS.SOLD },
     { isActive: true, isSellable: false, label: 'Damaged', name: STOCK_STATUS.DAMAGED },
     { isActive: true, isSellable: false, label: 'In Transfer', name: STOCK_STATUS.IN_TRANSFER },
@@ -333,6 +335,11 @@ export const seedDatabase = async (): Promise<void> => {
     {
       description: 'Collect repair payments through an open POS drawer and issue payment receipts.',
       key: USER_PERMISSIONS.REPAIRS_COLLECT_PAYMENT,
+      module: 'repairs',
+    },
+    {
+      description: 'Scan available spare-part barcodes into repair jobs and release reserved parts when they are not used.',
+      key: USER_PERMISSIONS.REPAIRS_MANAGE_PARTS,
       module: 'repairs',
     },
     {
