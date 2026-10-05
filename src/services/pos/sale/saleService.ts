@@ -19,7 +19,7 @@ import {
 } from '../../../db/schema';
 import { AppError } from '../../../errors/app-error';
 import type { AuthenticatedUser } from '../../auth/authService';
-import { DOCUMENT_TYPES, STOCK_STATUS } from '../../../utils/constants';
+import { DOCUMENT_TYPES, STOCK_STATUS, USER_ROLES } from '../../../utils/constants';
 import { createSaleSchema, dailySalesSummarySchema, listSalesSchema, saleIdSchema, searchSaleCustomersSchema, searchSaleProductsSchema } from './saleValidation';
 
 type AuditContext = { ipAddress?: string };
@@ -89,6 +89,7 @@ const saleDetail = async (id: number) => {
     locationId: sales.locationId,
     locationName: locations.name,
     paidAmount: sales.paidAmount,
+    priceOverrideReason: sales.priceOverrideReason,
     status: sales.status,
     subTotal: sales.subTotal,
     timestamp: sales.timestamp,
@@ -113,6 +114,9 @@ const saleDetail = async (id: number) => {
       stockId: stock.id,
       totalAmount: saleItems.totalAmount,
       unitPrice: saleItems.unitPrice,
+      // Fall back for invoices created before warranty snapshots were introduced.
+      warrantyPeriodMonths: sql<number>`coalesce(${saleItems.warrantyPeriodMonths}, ${products.warrantyPeriodMonths}, 0)`,
+      warrantyType: sql<string | null>`coalesce(${saleItems.warrantyType}, ${products.warrantyType})`,
     }).from(saleItems)
       .innerJoin(products, eq(products.id, saleItems.productId))
       .leftJoin(saleItemStock, eq(saleItemStock.saleItemId, saleItems.id))
@@ -138,6 +142,8 @@ const saleDetail = async (id: number) => {
       stockUnits: [] as Array<{ barcode: string | null; stockId: number | null }>,
       totalAmount: row.totalAmount,
       unitPrice: row.unitPrice,
+      warrantyPeriodMonths: row.warrantyPeriodMonths,
+      warrantyType: row.warrantyType,
     };
     if (row.stockId) item.stockUnits.push({ barcode: row.barcode, stockId: row.stockId });
     map.set(row.id, item);
@@ -145,6 +151,7 @@ const saleDetail = async (id: number) => {
   }, new Map<number, {
     discountAmount: string; id: number; productId: number; productName: string; productSku: string | null;
     quantity: number; stockUnits: Array<{ barcode: string | null; stockId: number | null }>; totalAmount: string; unitPrice: string;
+    warrantyPeriodMonths: number; warrantyType: string | null;
   }>()).values()];
   return { ...header, items: groupedItems, payments };
 };
@@ -354,6 +361,7 @@ export const searchCustomers = async (input: unknown) => {
 
 export const createSale = async (input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
   const data = createSaleSchema.parse(input);
+  const isAdministrator = user.roles.some(({ name }) => name === USER_ROLES.ADMIN);
   if (!user.defaultLocationId) throw new AppError('Your account does not have an assigned sale location.', 400);
   const saleLocationId = user.defaultLocationId;
   const requestedStockIds = data.items.flatMap((item) => item.stockIds);
@@ -405,9 +413,12 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
       lowestSellingPrice: products.lowestSellingPrice,
       mrpPrice: products.mrpPrice,
       name: products.name,
+      warrantyPeriodMonths: products.warrantyPeriodMonths,
+      warrantyType: products.warrantyType,
     }).from(products).where(inArray(products.id, productIds)) : [];
     const productPrices = new Map(priceRows.map((product) => [product.id, product]));
     let minimumAllowedTotal = 0;
+    const pricePolicyExceptions: Array<{ productId: number; reason: 'above_mrp' | 'below_floor' }> = [];
     for (const item of data.items) {
       const product = productPrices.get(item.productId);
       if (!product) throw new AppError(`Product ${item.productId} does not exist.`, 400);
@@ -416,8 +427,14 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
       if (lowestSellingPrice <= 0 || mrpPrice <= 0) throw new AppError(`Selling prices are not configured for '${product.name}'.`, 400);
       const lineTotal = item.unitPrice * item.quantity - item.discountAmount;
       const lineMinimum = lowestSellingPrice * item.quantity;
-      if (item.unitPrice > mrpPrice) throw new AppError(`Unit price for '${product.name}' cannot exceed MRP.`, 400);
-      if (lineTotal < lineMinimum) throw new AppError(`Discount for '${product.name}' cannot reduce price below lowest selling price.`, 400);
+      if (item.unitPrice > mrpPrice) {
+        if (!isAdministrator) throw new AppError(`Unit price for '${product.name}' cannot exceed MRP.`, 400);
+        pricePolicyExceptions.push({ productId: item.productId, reason: 'above_mrp' });
+      }
+      if (lineTotal < lineMinimum) {
+        if (!isAdministrator) throw new AppError(`Discount for '${product.name}' cannot reduce price below lowest selling price.`, 400);
+        pricePolicyExceptions.push({ productId: item.productId, reason: 'below_floor' });
+      }
       minimumAllowedTotal += lineMinimum;
     }
 
@@ -442,7 +459,12 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
     const itemDiscountTotal = money(data.items.reduce((total, item) => total + item.discountAmount, 0));
     const totalAmount = money(Math.max(0, subTotal - itemDiscountTotal - data.discountAmount));
     if (totalAmount < money(minimumAllowedTotal)) {
-      throw new AppError('Sale discount cannot reduce the invoice below the lowest selling price.', 400);
+      if (!isAdministrator) throw new AppError('Sale discount cannot reduce the invoice below the lowest selling price.', 400);
+      pricePolicyExceptions.push({ productId: 0, reason: 'below_floor' });
+    }
+    const priceOverrideReason = data.priceOverrideReason?.trim() || null;
+    if (pricePolicyExceptions.length && !priceOverrideReason) {
+      throw new AppError('Enter an administrator override reason when selling above MRP or below the lowest selling price.', 400);
     }
     if (data.payment.amount < totalAmount) throw new AppError('Paid amount cannot be less than sale total.', 400);
 
@@ -454,6 +476,7 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
       invoiceNo,
       locationId: saleLocationId,
       paidAmount: String(data.payment.amount),
+      priceOverrideReason,
       status: 'completed',
       subTotal: String(subTotal),
       timestamp,
@@ -469,6 +492,8 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
         saleId,
         totalAmount: String(itemTotals[index]),
         unitPrice: String(item.unitPrice),
+        warrantyPeriodMonths: productPrices.get(item.productId)?.warrantyPeriodMonths ?? 0,
+        warrantyType: productPrices.get(item.productId)?.warrantyType ?? null,
       });
       const saleItemId = Number(itemResult[0].insertId);
       await transaction.insert(saleItemStock).values(item.stockIds.map((stockId) => ({ saleItemId, stockId, timestamp })));
@@ -488,7 +513,16 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
       entityType: 'sale',
       ipAddress: context.ipAddress,
       module: 'sales',
-      newValues: { invoiceNo, totalAmount },
+      newValues: {
+        invoiceNo,
+        totalAmount,
+        ...(pricePolicyExceptions.length ? {
+          pricePolicyOverride: {
+            exceptions: pricePolicyExceptions,
+            reason: priceOverrideReason,
+          },
+        } : {}),
+      },
       timestamp,
       userId: user.id,
     });
