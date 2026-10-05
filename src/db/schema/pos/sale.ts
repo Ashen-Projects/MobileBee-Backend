@@ -20,6 +20,9 @@ export const sales = mysqlTable(
     drawerId: int('drawer_id').references(() => posDrawers.id),
     subTotal: decimal('sub_total', { precision: 12, scale: 2 }).notNull(),
     discountAmount: decimal('discount_amount', { precision: 12, scale: 2 }).notNull().default('0.00'),
+    // An administrator must document any exception to the standard product price policy.
+    // Keeping it on the sale preserves the approval context for future audits and reprints.
+    priceOverrideReason: varchar('price_override_reason', { length: 500 }),
     totalAmount: decimal('total_amount', { precision: 12, scale: 2 }).notNull(),
     paidAmount: decimal('paid_amount', { precision: 12, scale: 2 }).notNull().default('0.00'),
     status: mysqlEnum('status', ['draft', 'completed', 'cancelled', 'returned']).notNull().default('completed'),

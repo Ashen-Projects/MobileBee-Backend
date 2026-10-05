@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const numericString = z.coerce.number().min(0);
+const numericString = z.coerce.number().finite().min(0).max(99_999_999.99);
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD date format.');
 
 export const listSalesSchema = z.object({
@@ -45,6 +45,9 @@ export const createSaleSchema = z.object({
     }
   }),
   discountAmount: numericString.default(0),
+  // Required by the service only when an administrator makes a price-policy exception.
+  // It remains optional at the API boundary because normal sales do not need it.
+  priceOverrideReason: z.string().trim().max(500).optional(),
   items: z.array(z.object({
     discountAmount: numericString.default(0),
     productId: z.number().int().positive(),
