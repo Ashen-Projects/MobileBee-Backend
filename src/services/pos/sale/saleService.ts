@@ -374,10 +374,11 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
       id: posDrawers.id,
       locationId: posDrawers.locationId,
     }).from(posDrawers)
-      .where(and(eq(posDrawers.userId, user.id), eq(posDrawers.locationId, saleLocationId), eq(posDrawers.status, 'open')))
+      .where(and(eq(posDrawers.locationId, saleLocationId), eq(posDrawers.status, 'open')))
+      .orderBy(desc(posDrawers.openedAt))
       .limit(1)
       .for('update');
-    if (!activeDrawer) throw new AppError('Open your POS drawer before creating a sale.', 409);
+    if (!activeDrawer) throw new AppError('Open the POS drawer for this location before creating a sale.', 409);
 
     const selectedStock = requestedStockIds.length ? await transaction.select({
       id: stock.id,
