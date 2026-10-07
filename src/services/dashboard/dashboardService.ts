@@ -259,10 +259,9 @@ const purchasingSection = async (fromDate: string, toDate: string, scope: Locati
   };
 };
 
-const drawerSection = async (scope: LocationScope, user: AuthenticatedUser, canViewAllLocations: boolean) => {
-  const userFilter = isAdministrator(user) || canViewAllLocations ? [] : [eq(posDrawers.userId, user.id)];
+const drawerSection = async (scope: LocationScope) => {
   const rows = await db.select({ id: posDrawers.id }).from(posDrawers)
-    .where(and(eq(posDrawers.status, 'open'), ...locationFilters(posDrawers.locationId, scope), ...userFilter));
+    .where(and(eq(posDrawers.status, 'open'), ...locationFilters(posDrawers.locationId, scope)));
   return { openCount: rows.length };
 };
 
@@ -295,7 +294,7 @@ export const getOverview = async (input: unknown, user: AuthenticatedUser) => {
     visibility.inventory ? inventorySection(scope, visibility.inventoryCost) : Promise.resolve(null),
     visibility.repairs ? repairsSection(fromDate, toDate, scope) : Promise.resolve(null),
     visibility.purchasing ? purchasingSection(fromDate, toDate, scope, visibility.purchasingCost) : Promise.resolve(null),
-    visibility.sales ? drawerSection(scope, user, visibility.allLocations) : Promise.resolve(null),
+    visibility.sales ? drawerSection(scope) : Promise.resolve(null),
     getDashboardInsights(scope, visibility),
     visibility.sales ? getDashboardForecast(scope, todayInColombo(), visibility.forecastDetails) : Promise.resolve(null),
   ]);

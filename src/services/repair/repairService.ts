@@ -538,10 +538,11 @@ export const collectRepairPayment = async (idInput: unknown, input: unknown, use
 
     const [drawer] = await transaction.select({ id: posDrawers.id })
       .from(posDrawers)
-      .where(and(eq(posDrawers.userId, user.id), eq(posDrawers.locationId, user.defaultLocationId), eq(posDrawers.status, 'open')))
+      .where(and(eq(posDrawers.locationId, user.defaultLocationId), eq(posDrawers.status, 'open')))
+      .orderBy(desc(posDrawers.openedAt))
       .limit(1)
       .for('update');
-    if (!drawer) throw new AppError('Open your POS drawer before collecting a repair payment.', 409);
+    if (!drawer) throw new AppError('Open the POS drawer for this location before collecting a repair payment.', 409);
 
     const [{ totalPaid }] = await transaction.select({ totalPaid: sql<string>`coalesce(sum(${repairPayments.amount}), 0)` })
       .from(repairPayments).where(eq(repairPayments.repairJobId, id));

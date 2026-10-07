@@ -8,5 +8,8 @@ import { USER_PERMISSIONS } from '../../utils/constants';
 export const drawerRoutes = Router();
 
 drawerRoutes.get('/current', requirePermission(USER_PERMISSIONS.SALES_CREATE), asyncHandler(controller.current));
+drawerRoutes.get('/history', requirePermission(USER_PERMISSIONS.SALES_VIEW), asyncHandler(controller.history));
+drawerRoutes.get('/:id/report', requirePermission(USER_PERMISSIONS.SALES_VIEW), asyncHandler(controller.report));
+drawerRoutes.get('/:id/location-day', requirePermission(USER_PERMISSIONS.SALES_VIEW), asyncHandler(controller.locationDay));
 drawerRoutes.post('/open', requirePermission(USER_PERMISSIONS.SALES_CREATE), asyncHandler(controller.open));
 drawerRoutes.post('/close', requirePermission(USER_PERMISSIONS.SALES_CREATE), asyncHandler(controller.close));

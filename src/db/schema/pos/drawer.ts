@@ -1,4 +1,5 @@
-import { bigint, decimal, index, int, mysqlEnum, mysqlTable, text } from 'drizzle-orm/mysql-core';
+import { sql } from 'drizzle-orm';
+import { bigint, decimal, index, int, mysqlEnum, mysqlTable, text, uniqueIndex } from 'drizzle-orm/mysql-core';
 
 import { locations } from '../settings/location';
 import { users } from '../user/user';
@@ -14,6 +15,9 @@ export const posDrawers = mysqlTable(
       .notNull()
       .references(() => users.id),
     status: mysqlEnum('status', ['open', 'closed']).notNull().default('open'),
+    // NULL for closed drawers, so the unique index permits history while ensuring
+    // that one physical location can never have more than one active drawer.
+    openLocationId: int('open_location_id').generatedAlwaysAs(sql`(case when \`status\` = 'open' then \`location_id\` else null end)`, { mode: 'stored' }),
     openingCash: decimal('opening_cash', { precision: 12, scale: 2 }).notNull().default('0.00'),
     countedCash: decimal('counted_cash', { precision: 12, scale: 2 }),
     countedCardTotal: decimal('counted_card_total', { precision: 12, scale: 2 }),
@@ -32,6 +36,7 @@ export const posDrawers = mysqlTable(
   (table) => [
     index('pos_drawers_user_status_idx').on(table.userId, table.status),
     index('pos_drawers_location_status_idx').on(table.locationId, table.status),
+    uniqueIndex('pos_drawers_open_location_uq').on(table.openLocationId),
     index('pos_drawers_opened_at_idx').on(table.openedAt),
   ],
 );

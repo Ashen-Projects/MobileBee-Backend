@@ -17,3 +17,15 @@ export const open = async (req: Request, res: Response): Promise<void> => {
 export const close = async (req: Request, res: Response): Promise<void> => {
   res.status(200).json({ success: true, data: await drawerService.closeDrawer(req.body, user(res), context(req)) });
 };
+
+export const history = async (req: Request, res: Response): Promise<void> => {
+  res.status(200).json({ success: true, data: await drawerService.listClosedDrawerReports(req.query, user(res)) });
+};
+
+export const report = async (req: Request, res: Response): Promise<void> => {
+  res.status(200).json({ success: true, data: await drawerService.getClosedDrawerReport(req.params.id, user(res)) });
+};
+
+export const locationDay = async (req: Request, res: Response): Promise<void> => {
+  res.status(200).json({ success: true, data: await drawerService.getDrawerLocationDayReport(req.params.id, req.query, user(res)) });
+};
