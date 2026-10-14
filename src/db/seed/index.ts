@@ -74,6 +74,7 @@ export const seedDatabase = async (): Promise<void> => {
   const stockStatusSeeds = [
     { isActive: true, isSellable: true, label: 'Available', name: STOCK_STATUS.AVAILABLE },
     { isActive: true, isSellable: false, label: 'Pending GRN Approval', name: STOCK_STATUS.PENDING_GRN_APPROVAL },
+    { isActive: true, isSellable: false, label: 'Pending Damage Approval', name: STOCK_STATUS.PENDING_DAMAGE_APPROVAL },
     { isActive: true, isSellable: false, label: 'GRN Declined', name: STOCK_STATUS.GRN_DECLINED },
     { isActive: true, isSellable: false, label: 'Reserved', name: STOCK_STATUS.RESERVED },
     { isActive: true, isSellable: false, label: 'Reserved for Repair', name: STOCK_STATUS.REPAIR_RESERVED },

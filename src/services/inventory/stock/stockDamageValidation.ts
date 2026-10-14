@@ -8,6 +8,7 @@ export const STOCK_DAMAGE_REASONS = [
   'physical_damage',
   'water_damage',
   'manufacturing_defect',
+  'customer_return_damage',
   'packaging_damage',
   'expired_or_obsolete',
   'other',
@@ -16,6 +17,7 @@ export const STOCK_DAMAGE_REASONS = [
 export type StockDamageReason = (typeof STOCK_DAMAGE_REASONS)[number];
 
 export const stockDamageReasonLabels: Record<StockDamageReason, string> = {
+  customer_return_damage: 'Customer return damage',
   expired_or_obsolete: 'Expired or obsolete',
   manufacturing_defect: 'Manufacturing defect',
   other: 'Other',

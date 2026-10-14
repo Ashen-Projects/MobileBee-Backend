@@ -2,7 +2,7 @@ import { and, count, desc, eq, gte, inArray, isNotNull, lte, sql, type SQL } fro
 import { alias } from 'drizzle-orm/mysql-core';
 
 import { db } from '../../../db';
-import { auditLogs, locations, posDrawers, products, repairPayments, saleItems, saleItemStock, salePayments, sales, stock, users } from '../../../db/schema';
+import { auditLogs, locations, posDrawers, products, repairPayments, saleItems, saleItemStock, salePayments, saleReturnPayments, saleReturns, sales, stock, users } from '../../../db/schema';
 import { AppError } from '../../../errors/app-error';
 import type { AuthenticatedUser } from '../../auth/authService';
 import { safeCreateNotification } from '../../notification/notificationService';
@@ -126,17 +126,23 @@ type SalePaymentMethod = PaymentMethod | 'finance';
 type PaymentTotals = Record<PaymentMethod, number>;
 type DrawerSummary = {
   bankTransferRepairPayments: number;
+  bankTransferExchangeCollections: number;
   bankTransferSales: number;
   cardRepairPayments: number;
+  cardExchangeCollections: number;
   cardSales: number;
   cashRepairPayments: number;
+  cashExchangeCollections: number;
   cashSales: number;
   discountAmount: number;
   expectedBankTransferTotal: number;
   expectedCardTotal: number;
   expectedCash: number;
   expectedMobileTotal: number;
+  exchangeCollectionCount: number;
+  exchangeCollectionTotal: number;
   mobileRepairPayments: number;
+  mobileExchangeCollections: number;
   mobileSales: number;
   repairPaymentCount: number;
   repairPaymentTotal: number;
@@ -158,25 +164,35 @@ const buildDrawerSummary = (
   drawer: DrawerSummarySeed,
   salesTotals: { discountAmount: string; salesCount: number; totalAmount: string } | undefined,
   salePayments: PaymentAggregate[],
+  exchangePaymentsByMethod: PaymentAggregate[],
   repairPaymentsByMethod: PaymentAggregate[],
 ): DrawerSummary => {
   const salesByMethod = paymentTotals(salePayments);
+  const exchangesByMethod = paymentTotals(exchangePaymentsByMethod);
   const repairsByMethod = paymentTotals(repairPaymentsByMethod);
+  const exchangeCollectionCount = exchangePaymentsByMethod.reduce((total, payment) => total + Number(payment.paymentCount ?? 0), 0);
+  const exchangeCollectionTotal = money(Object.values(exchangesByMethod).reduce((total, value) => total + value, 0));
   const repairPaymentCount = repairPaymentsByMethod.reduce((total, payment) => total + Number(payment.paymentCount ?? 0), 0);
   const repairPaymentTotal = money(Object.values(repairsByMethod).reduce((total, value) => total + value, 0));
   return {
     bankTransferRepairPayments: repairsByMethod.bankTransfer,
+    bankTransferExchangeCollections: exchangesByMethod.bankTransfer,
     bankTransferSales: salesByMethod.bankTransfer,
     cardRepairPayments: repairsByMethod.card,
+    cardExchangeCollections: exchangesByMethod.card,
     cardSales: salesByMethod.card,
     cashRepairPayments: repairsByMethod.cash,
+    cashExchangeCollections: exchangesByMethod.cash,
     cashSales: salesByMethod.cash,
     discountAmount: money(Number(salesTotals?.discountAmount ?? 0)),
-    expectedBankTransferTotal: money(salesByMethod.bankTransfer + repairsByMethod.bankTransfer),
-    expectedCardTotal: money(salesByMethod.card + repairsByMethod.card),
-    expectedCash: money(drawer.openingCash + salesByMethod.cash + repairsByMethod.cash - drawer.cashExpenseAmount),
-    expectedMobileTotal: money(salesByMethod.mobile + repairsByMethod.mobile),
+    expectedBankTransferTotal: money(salesByMethod.bankTransfer + exchangesByMethod.bankTransfer + repairsByMethod.bankTransfer),
+    expectedCardTotal: money(salesByMethod.card + exchangesByMethod.card + repairsByMethod.card),
+    expectedCash: money(drawer.openingCash + salesByMethod.cash + exchangesByMethod.cash + repairsByMethod.cash - drawer.cashExpenseAmount),
+    expectedMobileTotal: money(salesByMethod.mobile + exchangesByMethod.mobile + repairsByMethod.mobile),
+    exchangeCollectionCount,
+    exchangeCollectionTotal,
     mobileRepairPayments: repairsByMethod.mobile,
+    mobileExchangeCollections: exchangesByMethod.mobile,
     mobileSales: salesByMethod.mobile,
     repairPaymentCount,
     repairPaymentTotal,
@@ -189,7 +205,7 @@ const buildDrawerSummary = (
 const drawerSummaries = async (drawers: DrawerSummarySeed[]) => {
   const drawerIds = drawers.map(({ id }) => id);
   if (!drawerIds.length) return new Map<number, DrawerSummary>();
-  const [salesTotals, salePaymentRows, repairPaymentRows] = await Promise.all([
+  const [salesTotals, salePaymentRows, exchangePaymentRows, repairPaymentRows] = await Promise.all([
     db.select({
       discountAmount: sql<string>`coalesce(sum(${sales.discountAmount}), 0)`,
       drawerId: sales.drawerId,
@@ -207,6 +223,15 @@ const drawerSummaries = async (drawers: DrawerSummarySeed[]) => {
       .where(and(inArray(sales.drawerId, drawerIds), eq(sales.status, 'completed')))
       .groupBy(sales.drawerId, salePayments.method),
     db.select({
+      amount: sql<string>`coalesce(sum(${saleReturnPayments.amount}), 0)`,
+      drawerId: saleReturns.drawerId,
+      method: saleReturnPayments.method,
+      paymentCount: count(saleReturnPayments.id),
+    }).from(saleReturnPayments)
+      .innerJoin(saleReturns, eq(saleReturns.id, saleReturnPayments.saleReturnId))
+      .where(and(inArray(saleReturns.drawerId, drawerIds), eq(saleReturns.status, 'completed')))
+      .groupBy(saleReturns.drawerId, saleReturnPayments.method),
+    db.select({
       amount: sql<string>`coalesce(sum(${repairPayments.amount}), 0)`,
       drawerId: repairPayments.drawerId,
       method: repairPayments.method,
@@ -218,6 +243,7 @@ const drawerSummaries = async (drawers: DrawerSummarySeed[]) => {
 
   const totalsByDrawer = new Map<number, { discountAmount: string; salesCount: number; totalAmount: string }>();
   const salesPaymentsByDrawer = new Map<number, PaymentAggregate[]>();
+  const exchangePaymentsByDrawer = new Map<number, PaymentAggregate[]>();
   const repairPaymentsByDrawer = new Map<number, PaymentAggregate[]>();
   for (const row of salesTotals) if (row.drawerId !== null) {
     totalsByDrawer.set(row.drawerId, { discountAmount: row.discountAmount, salesCount: Number(row.salesCount), totalAmount: row.totalAmount });
@@ -227,6 +253,11 @@ const drawerSummaries = async (drawers: DrawerSummarySeed[]) => {
     values.push({ amount: row.amount, drawerId: row.drawerId, method: row.method });
     salesPaymentsByDrawer.set(row.drawerId, values);
   }
+  for (const row of exchangePaymentRows) if (row.drawerId !== null) {
+    const values = exchangePaymentsByDrawer.get(row.drawerId) ?? [];
+    values.push({ amount: row.amount, drawerId: row.drawerId, method: row.method, paymentCount: Number(row.paymentCount) });
+    exchangePaymentsByDrawer.set(row.drawerId, values);
+  }
   for (const row of repairPaymentRows) if (row.drawerId !== null) {
     const values = repairPaymentsByDrawer.get(row.drawerId) ?? [];
     values.push({ amount: row.amount, drawerId: row.drawerId, method: row.method, paymentCount: Number(row.paymentCount) });
@@ -234,13 +265,13 @@ const drawerSummaries = async (drawers: DrawerSummarySeed[]) => {
   }
   return new Map(drawers.map((drawer) => [
     drawer.id,
-    buildDrawerSummary(drawer, totalsByDrawer.get(drawer.id), salesPaymentsByDrawer.get(drawer.id) ?? [], repairPaymentsByDrawer.get(drawer.id) ?? []),
+    buildDrawerSummary(drawer, totalsByDrawer.get(drawer.id), salesPaymentsByDrawer.get(drawer.id) ?? [], exchangePaymentsByDrawer.get(drawer.id) ?? [], repairPaymentsByDrawer.get(drawer.id) ?? []),
   ]));
 };
 
 const drawerSummary = async (drawerId: number, openingCash: number, cashExpenseAmount: number) =>
   (await drawerSummaries([{ cashExpenseAmount, id: drawerId, openingCash }])).get(drawerId)
-  ?? buildDrawerSummary({ cashExpenseAmount, id: drawerId, openingCash }, undefined, [], []);
+  ?? buildDrawerSummary({ cashExpenseAmount, id: drawerId, openingCash }, undefined, [], [], []);
 
 export const closeDrawer = async (input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
   const data = closeDrawerSchema.parse(input);
@@ -426,7 +457,7 @@ export const listClosedDrawerReports = async (input: unknown, user: Authenticate
     items: drawers.map((drawer) => {
       const summary = summaries.get(drawer.id) ?? buildDrawerSummary({
         cashExpenseAmount: Number(drawer.cashExpenseAmount ?? 0), id: drawer.id, openingCash: Number(drawer.openingCash),
-      }, undefined, [], []);
+      }, undefined, [], [], []);
       return closeReport(drawer, summary);
     }),
     pagination: {

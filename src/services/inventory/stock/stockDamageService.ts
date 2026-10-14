@@ -135,13 +135,15 @@ export const createStockDamage = async (input: unknown, user: AuthenticatedUser,
   const locationId = assignedLocationId(user);
   const approveImmediately = isAdministrator(user);
   const result = await db.transaction(async (transaction) => {
-    const [availableStatus, damagedStatus] = await Promise.all([
+    const [availableStatus, damagedStatus, pendingStatus] = await Promise.all([
       transaction.select().from(stockStatuses).where(eq(stockStatuses.name, STOCK_STATUS.AVAILABLE)).limit(1),
       transaction.select().from(stockStatuses).where(eq(stockStatuses.name, STOCK_STATUS.DAMAGED)).limit(1),
+      transaction.select().from(stockStatuses).where(eq(stockStatuses.name, STOCK_STATUS.PENDING_DAMAGE_APPROVAL)).limit(1),
     ]);
     const available = availableStatus[0];
     const damaged = damagedStatus[0];
-    if (!available || !damaged) throw new AppError('Required stock statuses are not configured. Contact an administrator.', 500);
+    const pending = pendingStatus[0];
+    if (!available || !damaged || !pending) throw new AppError('Required stock statuses are not configured. Contact an administrator.', 500);
 
     const units = await transaction.select({
       barcode: stock.barcode,
@@ -232,6 +234,23 @@ export const createStockDamage = async (input: unknown, user: AuthenticatedUser,
         timestamp: now,
         userId: user.id,
       })));
+    } else {
+      // Hold a requested unit immediately. Without this transition it could be
+      // sold again while an administrator is deciding the write-off.
+      await transaction.update(stock).set({ status: pending.id }).where(inArray(stock.id, units.map((unit) => unit.stockId)));
+      await transaction.insert(stockLogs).values(units.map((unit) => ({
+        action: 'damage_request_hold',
+        newLocationId: locationId,
+        newStatus: pending.id,
+        note: `${reasonLabel}${note ? ` — ${note}` : ''}`,
+        previousLocationId: locationId,
+        previousStatus: unit.statusId,
+        referenceId: adjustmentId,
+        referenceType: 'stock_damage',
+        stockId: unit.stockId,
+        timestamp: now,
+        userId: user.id,
+      })));
     }
     await transaction.insert(auditLogs).values(audit(user, context, {
       action: approveImmediately ? 'damage_write_off' : 'damage_request_submitted',
@@ -296,13 +315,15 @@ export const approveStockDamage = async (idInput: unknown, user: AuthenticatedUs
     }).from(stockAdjustmentItems).where(eq(stockAdjustmentItems.stockAdjustmentId, adjustmentId)).for('update');
     if (!items.length) throw new AppError('This damaged-stock request does not contain any stock units.', 409);
 
-    const [availableRows, damagedRows] = await Promise.all([
+    const [availableRows, damagedRows, pendingRows] = await Promise.all([
       transaction.select().from(stockStatuses).where(eq(stockStatuses.name, STOCK_STATUS.AVAILABLE)).limit(1),
       transaction.select().from(stockStatuses).where(eq(stockStatuses.name, STOCK_STATUS.DAMAGED)).limit(1),
+      transaction.select().from(stockStatuses).where(eq(stockStatuses.name, STOCK_STATUS.PENDING_DAMAGE_APPROVAL)).limit(1),
     ]);
     const available = availableRows[0];
     const damaged = damagedRows[0];
-    if (!available || !damaged) throw new AppError('Required stock statuses are not configured. Contact an administrator.', 500);
+    const pending = pendingRows[0];
+    if (!available || !damaged || !pending) throw new AppError('Required stock statuses are not configured. Contact an administrator.', 500);
 
     const units = await transaction.select({
       barcode: stock.barcode,
@@ -315,7 +336,7 @@ export const approveStockDamage = async (idInput: unknown, user: AuthenticatedUs
       .where(inArray(stock.id, items.map((item) => item.stockId)))
       .for('update');
     if (units.length !== items.length) throw new AppError('One or more requested stock units no longer exist.', 409);
-    if (units.some((unit) => unit.locationId !== request.locationId || unit.statusId !== available.id)) {
+    if (units.some((unit) => unit.locationId !== request.locationId || (unit.statusId !== available.id && unit.statusId !== pending.id))) {
       throw new AppError('One or more requested units are no longer available. They may have been sold or changed after the request was submitted.', 409);
     }
 
@@ -359,7 +380,34 @@ export const declineStockDamage = async (idInput: unknown, input: unknown, user:
     if (!request) throw new AppError('Damaged-stock request not found.', 404);
     if (request.status !== 'draft') throw new AppError('Only pending damaged-stock requests can be declined.', 409);
 
+    const [available] = await transaction.select().from(stockStatuses).where(eq(stockStatuses.name, STOCK_STATUS.AVAILABLE)).limit(1);
+    const [pending] = await transaction.select().from(stockStatuses).where(eq(stockStatuses.name, STOCK_STATUS.PENDING_DAMAGE_APPROVAL)).limit(1);
+    if (!available || !pending) throw new AppError('Required stock statuses are not configured. Contact an administrator.', 500);
+    const items = await transaction.select({ stockId: stockAdjustmentItems.stockId }).from(stockAdjustmentItems)
+      .where(eq(stockAdjustmentItems.stockAdjustmentId, adjustmentId)).for('update');
+    const units = items.length ? await transaction.select({ id: stock.id, locationId: stock.locationId, status: stock.status })
+      .from(stock).where(inArray(stock.id, items.map((item) => item.stockId))).for('update') : [];
+    if (units.some((unit) => unit.locationId !== request.locationId)) throw new AppError('A requested stock unit belongs to another location.', 409);
+
     await transaction.update(stockAdjustments).set({ decisionNote: note || null, status: 'declined' }).where(eq(stockAdjustments.id, adjustmentId));
+    const heldIds = units.filter((unit) => unit.status === pending.id).map((unit) => unit.id);
+    if (heldIds.length) {
+      const now = Date.now();
+      await transaction.update(stock).set({ status: available.id }).where(inArray(stock.id, heldIds));
+      await transaction.insert(stockLogs).values(heldIds.map((stockId) => ({
+        action: 'damage_request_released',
+        newLocationId: request.locationId,
+        newStatus: available.id,
+        note: note || `Declined from ${request.adjustmentNo}`,
+        previousLocationId: request.locationId,
+        previousStatus: pending.id,
+        referenceId: adjustmentId,
+        referenceType: 'stock_damage',
+        stockId,
+        timestamp: now,
+        userId: user.id,
+      })));
+    }
     await transaction.insert(auditLogs).values(audit(user, context, {
       action: 'damage_request_declined',
       entityId: adjustmentId,

@@ -361,6 +361,7 @@ export const searchCustomers = async (input: unknown) => {
 
 export const createSale = async (input: unknown, user: AuthenticatedUser, context: AuditContext = {}) => {
   const data = createSaleSchema.parse(input);
+  const paymentLines = data.payments ?? (data.payment ? [data.payment] : []);
   const isAdministrator = user.roles.some(({ name }) => name === USER_ROLES.ADMIN);
   if (!user.defaultLocationId) throw new AppError('Your account does not have an assigned sale location.', 400);
   const saleLocationId = user.defaultLocationId;
@@ -439,12 +440,21 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
       minimumAllowedTotal += lineMinimum;
     }
 
-    let customerId = data.customer?.id ?? null;
-    if (!customerId && data.customer?.phone) {
-      const [existing] = await transaction.select({ id: customers.id }).from(customers).where(eq(customers.phone, data.customer.phone)).limit(1);
+    let customerId = data.customer.id ?? null;
+    if (customerId) {
+      const [existing] = await transaction.select({ id: customers.id }).from(customers)
+        .where(and(eq(customers.id, customerId), eq(customers.isActive, true)))
+        .limit(1);
+      if (!existing) throw new AppError('The selected customer does not exist or is inactive.', 400);
+    }
+    if (!customerId && data.customer.phone) {
+      const [existing] = await transaction.select({ id: customers.id, isActive: customers.isActive }).from(customers)
+        .where(eq(customers.phone, data.customer.phone))
+        .limit(1);
+      if (existing && !existing.isActive) throw new AppError('The selected customer is inactive.', 400);
       customerId = existing?.id ?? null;
     }
-    if (!customerId && data.customer?.name && data.customer?.phone) {
+    if (!customerId && data.customer.name && data.customer.phone) {
       const result = await transaction.insert(customers).values({
         isActive: true,
         name: data.customer.name,
@@ -453,6 +463,7 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
       });
       customerId = Number(result[0].insertId);
     }
+    if (!customerId) throw new AppError('Select an existing customer or provide a customer name and phone number.', 400);
 
     const invoiceNo = await ensureInvoiceNumber(transaction, saleLocationId);
     const itemTotals = data.items.map((item) => money(item.unitPrice * item.quantity - item.discountAmount));
@@ -467,7 +478,10 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
     if (pricePolicyExceptions.length && !priceOverrideReason) {
       throw new AppError('Enter an administrator override reason when selling above MRP or below the lowest selling price.', 400);
     }
-    if (data.payment.amount < totalAmount) throw new AppError('Paid amount cannot be less than sale total.', 400);
+    const paidAmount = money(paymentLines.reduce((total, payment) => total + payment.amount, 0));
+    if (paidAmount !== totalAmount) {
+      throw new AppError(`Collected payment must exactly match the sale total (${totalAmount.toFixed(2)}).`, 400);
+    }
 
     const timestamp = Date.now();
     const result = await transaction.insert(sales).values({
@@ -476,7 +490,7 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
       drawerId: activeDrawer.id,
       invoiceNo,
       locationId: saleLocationId,
-      paidAmount: String(data.payment.amount),
+      paidAmount: String(paidAmount),
       priceOverrideReason,
       status: 'completed',
       subTotal: String(subTotal),
@@ -500,14 +514,14 @@ export const createSale = async (input: unknown, user: AuthenticatedUser, contex
       await transaction.insert(saleItemStock).values(item.stockIds.map((stockId) => ({ saleItemId, stockId, timestamp })));
       await transaction.update(stock).set({ status: soldStatusId }).where(inArray(stock.id, item.stockIds));
     }
-    await transaction.insert(salePayments).values({
-      amount: String(data.payment.amount),
-      method: data.payment.method,
+    await transaction.insert(salePayments).values(paymentLines.map((payment) => ({
+      amount: String(money(payment.amount)),
+      method: payment.method,
       receivedBy: user.id,
-      referenceNo: data.payment.referenceNo || null,
+      referenceNo: payment.referenceNo || null,
       saleId,
       timestamp,
-    });
+    })));
     await transaction.insert(auditLogs).values({
       action: 'create',
       entityId: saleId,

@@ -5,4 +5,6 @@ export * from './salePayment';
 export * from './saleRefund';
 export * from './saleReturn';
 export * from './saleReturnItem';
+export * from './saleReturnExchangeItem';
+export * from './saleReturnPayment';
 export * from './drawer';
