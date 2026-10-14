@@ -2,6 +2,16 @@ import { z } from 'zod';
 
 const numericString = z.coerce.number().finite().min(0).max(99_999_999.99);
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD date format.');
+const paymentMethod = z.enum(['cash', 'card', 'bankTransfer', 'mobile']);
+const paymentLineSchema = z.object({
+  amount: z.coerce.number().finite().positive('Enter an amount greater than zero.').max(99_999_999.99),
+  method: paymentMethod,
+  referenceNo: z.string().trim().max(255).optional(),
+}).superRefine((payment, context) => {
+  if (payment.method !== 'cash' && !payment.referenceNo) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'A reference number is required for non-cash payments.', path: ['referenceNo'] });
+  }
+});
 
 export const listSalesSchema = z.object({
   fromDate: dateString.optional(),
@@ -35,8 +45,8 @@ export const createSaleSchema = z.object({
     id: z.number().int().positive().optional(),
     name: z.string().trim().min(1, 'Customer name is required.').max(255).optional(),
     phone: z.string().trim().min(1, 'Customer phone number is required.').max(30).optional(),
-  }).optional().superRefine((customer, ctx) => {
-    if (!customer || customer.id) return;
+  }).superRefine((customer, ctx) => {
+    if (customer.id) return;
     if (!customer.name) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Customer name is required.', path: ['name'] });
     }
@@ -56,9 +66,18 @@ export const createSaleSchema = z.object({
     unitPrice: numericString,
   })).min(1, 'Add at least one product to the sale.'),
   locationId: z.number().int().positive(),
-  payment: z.object({
-    amount: numericString,
-    method: z.enum(['cash', 'card', 'bankTransfer']),
-    referenceNo: z.string().trim().max(255).optional(),
-  }),
-}).strict();
+  // `payment` is retained temporarily for older clients. New clients must use
+  // `payments`, which supports an exact split across the accepted methods.
+  payment: paymentLineSchema.optional(),
+  payments: z.array(paymentLineSchema).min(1).max(4).optional(),
+}).strict().superRefine((sale, context) => {
+  if (!sale.payment && !sale.payments?.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Add at least one payment method.', path: ['payments'] });
+  }
+  if (sale.payment && sale.payments?.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Send either payment or payments, not both.', path: ['payments'] });
+  }
+  if (sale.payments && new Set(sale.payments.map((payment) => payment.method)).size !== sale.payments.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Use each payment method only once.', path: ['payments'] });
+  }
+});

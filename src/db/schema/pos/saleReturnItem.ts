@@ -18,6 +18,7 @@ export const saleReturnItems = mysqlTable(
     quantity: int('quantity').notNull().default(1),
     refundAmount: decimal('refund_amount', { precision: 12, scale: 2 }).notNull(),
     condition: mysqlEnum('condition', ['sealed', 'opened', 'damaged', 'defective']).notNull(),
+    disposition: mysqlEnum('disposition', ['restock', 'damage']).notNull().default('restock'),
     restockStatus: int('restock_status').references(() => stockStatuses.id),
   },
   (table) => [

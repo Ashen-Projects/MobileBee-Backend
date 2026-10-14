@@ -3,6 +3,7 @@ import { users } from '../user/user';
 import { locations } from '../settings/location';
 import { customers } from '../customer/customer';
 import { sales } from './sale';
+import { posDrawers } from './drawer';
 
 export const saleReturns = mysqlTable(
   'sale_returns',
@@ -16,8 +17,11 @@ export const saleReturns = mysqlTable(
       .notNull()
       .references(() => locations.id),
     customerId: int('customer_id').references(() => customers.id),
-    status: mysqlEnum('status', ['pending', 'approved', 'rejected', 'refunded']).notNull().default('pending'),
+    drawerId: int('drawer_id').references(() => posDrawers.id),
+    status: mysqlEnum('status', ['pending', 'approved', 'rejected', 'refunded', 'completed']).notNull().default('pending'),
     totalAmount: decimal('total_amount', { precision: 12, scale: 2 }).notNull().default('0.00'),
+    exchangeTotal: decimal('exchange_total', { precision: 12, scale: 2 }).notNull().default('0.00'),
+    balanceAmount: decimal('balance_amount', { precision: 12, scale: 2 }).notNull().default('0.00'),
     reason: text('reason').notNull(),
     createdBy: int('created_by')
       .notNull()
